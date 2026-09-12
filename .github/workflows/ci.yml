@@ -20,15 +20,16 @@ jobs:
           git clone --depth 1 https://github.com/axboe/liburing.git /tmp/liburing
           (cd /tmp/liburing && ./configure --prefix=/usr/local && make -j"$(nproc)" && sudo make install)
           sudo ldconfig
-      - name: Configure and build (release)
+      - name: Configure (release)
         run: |
           g++ --version | head -1
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo 2>&1 | tee conf.log || {
+            tail -40 conf.log | sed 's/^/::error::/'; exit 1; }
+      - name: Build (release)
+        run: |
           set -o pipefail
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          cmake --build build 2>&1 | tee build.log || {
-            grep -E 'error:|Error|fatal' build.log | head -15 | sed 's/^/::error::/' || true
-            exit 1
-          }
+          cmake --build build --keep-going 2>&1 | tee build.log || {
+            tail -40 build.log | sed 's/^/::error::/'; exit 1; }
       - name: Test (release)
         run: ./build/iox_tests
       - name: Test (ASan + UBSan)
