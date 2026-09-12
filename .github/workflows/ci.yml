@@ -22,8 +22,13 @@ jobs:
           sudo ldconfig
       - name: Configure and build (release)
         run: |
+          g++ --version | head -1
+          set -o pipefail
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          cmake --build build
+          cmake --build build 2>&1 | tee build.log || {
+            grep -E 'error:|Error|fatal' build.log | head -15 | sed 's/^/::error::/' || true
+            exit 1
+          }
       - name: Test (release)
         run: ./build/iox_tests
       - name: Test (ASan + UBSan)
