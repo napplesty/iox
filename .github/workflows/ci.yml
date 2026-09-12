@@ -28,14 +28,16 @@ jobs:
       - name: Build (release)
         run: |
           set -o pipefail
-          cmake --build build --keep-going 2>&1 | tee build.log || {
+          # stdexec-heavy TUs can take 2-4 GiB each; cap parallelism so the
+          # 4-core runner does not OOM (ninja default = core count)
+          cmake --build build --keep-going -j 2 2>&1 | tee build.log || {
             tail -40 build.log | sed 's/^/::error::/'; exit 1; }
       - name: Test (release)
         run: ./build/iox_tests
       - name: Test (ASan + UBSan)
         run: |
           cmake -S . -B build-asan -G Ninja -DIOX_SANITIZE=ON
-          cmake --build build-asan
+          cmake --build build-asan -j 2
           ./build-asan/iox_tests
       - name: Header self-containment sweep
         run: |
