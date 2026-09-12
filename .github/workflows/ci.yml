@@ -80,3 +80,7 @@ jobs:
             -DIOX_BUILD_TESTS=OFF -DIOX_BUILD_EXAMPLES=OFF -DIOX_BUILD_BENCH=OFF
           cmake --build build-py --target iox_python
           PYTHONPATH="$(dirname "$(find build-py -name 'iox*.so' | head -1)")" python tests/test_python.py
+      - name: kv_cache example (self-checking tiered KV pool)
+        run: |
+          PYTHONPATH="$(dirname "$(find build-py -name 'iox*.so' | head -1)")" \
+            python examples/python/kv_cache.py
