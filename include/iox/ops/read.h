@@ -1,6 +1,5 @@
-// io::read — stream-position read. Plain wbytes takes IORING_OP_READ; a
-// registered_buffer takes IORING_OP_READ_FIXED (zero-copy) — path choice is
-// type-driven.
+// iox — unified async IO for Linux
+// include/iox/ops/read.h — path choice is
 #pragma once
 
 #include "iox/core/buffer.h"
@@ -23,7 +22,7 @@ struct read_policy {
     using complete = transfer_complete;
 };
 
-struct read_fixed_policy { // registered-buffer zero-copy read
+struct read_fixed_policy {
     struct args_t {
         registered_buffer buffer{};
     };
@@ -36,13 +35,9 @@ struct read_fixed_policy { // registered-buffer zero-copy read
     using complete = transfer_complete;
 };
 
-
-} // namespace detail
+}
 
 inline constexpr struct read_t {
-    /// Stream-position read into a plain writable view. Customization point:
-    /// drivers provide `tag_invoke(read_t, ctx, handle, wbytes)` for their
-    /// own handle types; the fd default below serves fd-backed handles.
     template <class H>
     requires tag_invocable<read_t, io_context&, H, wbytes>
     auto operator()(io_context& ctx, H&& h, wbytes dest) const
@@ -51,7 +46,6 @@ inline constexpr struct read_t {
         return tag_invoke(*this, ctx, std::forward<H>(h), dest);
     }
 
-    /// Registered-buffer read: selects IORING_OP_READ_FIXED (zero-copy).
     template <class H>
     requires tag_invocable<read_t, io_context&, H, registered_buffer&>
     auto operator()(io_context& ctx, H&& h, registered_buffer& buffer) const
@@ -60,8 +54,6 @@ inline constexpr struct read_t {
         return tag_invoke(*this, ctx, std::forward<H>(h), buffer);
     }
 } read{};
-
-// ---- fd driver defaults ----------------------------------------------------
 
 template <class H>
 requires std::same_as<std::remove_cvref_t<H>, iox::fd> || readable<std::remove_cvref_t<H>>
@@ -75,4 +67,4 @@ auto tag_invoke(read_t, io_context& ctx, H&& h, registered_buffer& buffer) noexc
     return detail::fd_sender<detail::read_fixed_policy>{&ctx, detail::reader_fd(h), {buffer}};
 }
 
-} // namespace iox::io
+}

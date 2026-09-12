@@ -1,8 +1,5 @@
-// stdin_echo — M1 acceptance example: fd-generic async read/write with EOF
-// handling. Every read and write goes through io_uring; nothing blocks.
-//
-//     echo hello | ./build/stdin_echo
-//     ./build/stdin_echo   # interactive (Ctrl-D ends)
+// iox — unified async IO for Linux
+// examples/stdin_echo.cc — handling. Every read and write goes through io_uring; nothing blocks.
 #include <array>
 #include <cstddef>
 #include <cstdio>
@@ -25,7 +22,7 @@ int main() {
         }
         const auto n = std::get<0>(*r);
         if (n == 0) {
-            break; // EOF
+            break;
         }
 
         auto w = iox::exec::sync_wait(

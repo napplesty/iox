@@ -1,22 +1,5 @@
-// examples/eventfd_device.cc — M5 acceptance: a custom device driver in
-// one file, ZERO core changes.
-//
-// What a driver is in iox (design §六):
-//   1. a HANDLE type you define (counterdev::device::handle below) —
-//   2. tag_invoke overloads for the vocabulary operations it supports
-//      (this one: io::read) —
-//   3. completions through the op_base thunk protocol, delivered by
-//      io_context::dispatch(op_address, res, flags) — usually funneled
-//      through a completion_source (three attachment modes; this device
-//      uses the fd-mounted mode) —
-//   4. optional one-liners: io::supports capability answers, the
-//      registered_driver trait.
-//
-// The eventfd here plays the role an IRQ fd plays for real hardware: the
-// device OWNS it, the loop polls it through the completion_source bridge,
-// and on_ready() turns "fd readable" into typed completions for parked
-// operations. From the caller's side, io::read on the device handle looks
-// exactly like io::read on a pipe — same CPO, same composition.
+// iox — unified async IO for Linux
+// examples/eventfd_device.cc — one file, ZERO core changes.
 #include <sys/eventfd.h>
 #include <unistd.h>
 
@@ -38,9 +21,6 @@ using namespace std::chrono_literals;
 
 namespace counterdev {
 
-// ---------------------------------------------------------------------------
-// (3) the device: owns the eventfd, parks pending ops, bridges completions
-// ---------------------------------------------------------------------------
 class device;
 
 struct handle {
@@ -54,17 +34,11 @@ public:
     device(const device&) = delete;
     device& operator=(const device&) = delete;
 
-    // fd-mounted mode: the eventfd IS the readiness fd. io_context arms one
-    // readiness poll on it at attach — no core changes, no busy CPU.
     iox::fd completion_fd() const noexcept override { return iox::fd{efd_}; }
 
-    // The fd is readable → drain the doorbell and dispatch every parked op.
-    // Runs on the io thread; `ctx.dispatch` re-enters the loop's normal
-    // completion path, so a device completion is indistinguishable from a
-    // CQE once armed (§三.① — no vtable on the data path).
     void on_ready(io_context& ctx) noexcept override {
         std::uint64_t sample = 0;
-        const ssize_t n = ::read(efd_, &sample, sizeof(sample)); // sums + resets
+        const ssize_t n = ::read(efd_, &sample, sizeof(sample));
         (void)n;
         for (iox::op_base* op : pending_) {
             ctx.dispatch(reinterpret_cast<std::uint64_t>(op),
@@ -73,14 +47,13 @@ public:
         pending_.clear();
     }
 
-    // The "hardware": add `v` to the counter and raise the interrupt.
     void interrupt(std::uint64_t v) noexcept {
         const std::uint64_t one = v;
         const ssize_t rang = ::write(efd_, &one, sizeof(one));
         (void)rang;
     }
 
-    // Called from the operation's start() on the io thread.
+  // Called from the operation's start() on the io thread.
     void submit(iox::op_base* op) noexcept { pending_.push_back(op); }
 
 private:
@@ -88,10 +61,6 @@ private:
     std::vector<iox::op_base*> pending_; // io thread only
 };
 
-// ---------------------------------------------------------------------------
-// (3) the operation: op_base thunk protocol, payload rides in the op state.
-// res is just a signal — here it carries the counter sample itself.
-// ---------------------------------------------------------------------------
 template <class R>
 struct read_op final : iox::op_base {
     R r;
@@ -107,20 +76,15 @@ struct read_op final : iox::op_base {
         if (res < 0) {
             stdexec::set_error(std::move(o->r), iox::error::from_negative(res));
         } else {
-            // domain-typed value, like io::accept completing with a Socket
             stdexec::set_value(std::move(o->r), static_cast<std::uint64_t>(res));
         }
     }
 
     void start() noexcept { dev->submit(this); }
 
-    device* dev = nullptr; // set by the sender's connect
+    device* dev = nullptr;
 };
 
-// ---------------------------------------------------------------------------
-// (2) the sender io::read returns for this handle — same shape fd senders
-// have: context-free, connected where the caller composes it.
-// ---------------------------------------------------------------------------
 struct read_sender {
     device* dev;
 
@@ -137,40 +101,32 @@ struct read_sender {
     }
 };
 
-// (2) vocabulary customization: io::read on our handle. Found by ADL; beats
-// the fd-driver default (the handle is not fd-backed at all).
 inline read_sender tag_invoke(io::read_t, io_context&, handle& h, wbytes) noexcept {
     return read_sender{h.dev};
 }
 
-// (4) capability answers: this device keeps no user buffers, so zero-copy
-// is off (fd handles answer "true" by default — this override wins).
 inline bool tag_invoke(io::detail::supports_t, io::zero_copy_t, const handle&) noexcept {
     return false;
 }
 
-} // namespace counterdev
+}
 
-// (4) compile-time driver registration — the core never changes.
+  // (4) compile-time driver registration — the core never changes.
 namespace iox::driver {
 template <>
 inline constexpr bool registered_driver<counterdev::device> = true;
-} // namespace iox::driver
+}
 
 static_assert(iox::driver::registered_driver<counterdev::device>);
-
-// ---------------------------------------------------------------------------
 
 int main() {
     using namespace iox;
     io_context ctx;
 
     counterdev::device dev;
-    ctx.attach_source(dev); // fd-mounted: one line, zero core changes
+    ctx.attach_source(dev);
     counterdev::handle h{&dev};
 
-    // The "hardware": two interrupts, 30 ms apart, from another thread —
-    // the shape a completion IRQ arriving from a device queue has.
     std::thread producer([&] {
         std::this_thread::sleep_for(30ms);
         dev.interrupt(7);
@@ -178,7 +134,6 @@ int main() {
         dev.interrupt(9);
     });
 
-    // Same vocabulary, same composition, as any readable handle:
     const auto first = ex::sync_wait(ctx, io::read(ctx, h, {}));
     const auto second = ex::sync_wait(ctx, io::read(ctx, h, {}));
     producer.join();
@@ -191,7 +146,7 @@ int main() {
     const auto b = std::get<0>(*second.value);
 
     ctx.detach_source(dev);
-    ctx.run_for(20ms); // retire the readiness poll before teardown
+    ctx.run_for(20ms);
 
     std::printf("eventfd_device: OK (samples %llu, %llu; zero_copy=%d dma=%d)\n",
                 static_cast<unsigned long long>(a), static_cast<unsigned long long>(b),

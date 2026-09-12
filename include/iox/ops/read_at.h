@@ -1,5 +1,5 @@
-// io::read_at — positional read (seekable objects: files). uoffset_t is a
-// strong type: passing a size where an offset belongs does not compile.
+// iox — unified async IO for Linux
+// include/iox/ops/read_at.h — strong type: passing a size where an offset belongs does not compile.
 #pragma once
 
 #include "iox/core/buffer.h"
@@ -16,10 +16,6 @@ struct read_at_policy {
         wbytes dest{};
         std::int64_t offset = 0;
     };
-    // uoffset_t{UINT64_MAX} used to wrap to -1 — the kernel's "use the
-    // current file position" sentinel — silently turning a positional read
-    // into a stream read (red-team F3). Offsets that cannot round-trip
-    // through int64 complete with EOVERFLOW instead.
     template <class R>
     static bool immediate(R& r, args_t& a) noexcept {
         if (a.offset < 0) {
@@ -36,13 +32,9 @@ struct read_at_policy {
     using complete = transfer_complete;
 };
 
-
-} // namespace detail
+}
 
 inline constexpr struct read_at_t {
-    /// Customization point: drivers provide `tag_invoke(read_at_t, ctx,
-    /// handle, wbytes, uoffset_t)` for their own handle types; the fd
-    /// default below serves seekable fd-backed handles.
     template <class H>
     requires tag_invocable<read_at_t, io_context&, H, wbytes, uoffset_t>
     auto operator()(io_context& ctx, H&& h, wbytes dest, uoffset_t at) const
@@ -52,8 +44,6 @@ inline constexpr struct read_at_t {
     }
 } read_at{};
 
-// ---- fd driver default -----------------------------------------------------
-
 template <class H>
 requires std::same_as<std::remove_cvref_t<H>, iox::fd> || read_seekable<std::remove_cvref_t<H>>
 auto tag_invoke(read_at_t, io_context& ctx, H&& h, wbytes dest, uoffset_t at) noexcept {
@@ -61,4 +51,4 @@ auto tag_invoke(read_at_t, io_context& ctx, H&& h, wbytes dest, uoffset_t at) no
         &ctx, detail::reader_fd(h), {dest, static_cast<std::int64_t>(at.v)}};
 }
 
-} // namespace iox::io
+}

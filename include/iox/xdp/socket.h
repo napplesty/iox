@@ -1,32 +1,5 @@
 // iox — unified async IO for Linux
-// xdp/socket.h — the AF_XDP (XSK) driver handle (M6, design §六).
-//
-// An XDP socket moves packets through a SHARED umem: the kernel DMAs into
-// chunks the application owns, and every queue is a memory-mapped ring. The
-// driver is the second real user of the M5 completion_source bridge: the
-// xsk fd is readable when RX/completion rings advance, so the context's
-// readiness poll calls on_ready(), which drains the rings and dispatches
-// parked vocabulary ops — identical to the NVMe IRQ-fd shape.
-//
-//   xdp::umem mem = *xdp::umem::create(64 /*chunks*/, 4096);
-//   xdp::socket xsk = *xdp::socket::create(mem, "lo", /*queue=*/0, /*ring_size=*/64);
-//   ctx.attach_source(xsk);
-//   xdp::frame f = xsk.tx_frame();          // borrow a free chunk
-//   fill(f); xdp::write_frame(ctx, xsk, f); // completes when the chunk returns
-//   xdp::read(ctx, xsk)                     // → set_value(xdp::frame) (needs an
-//                                           //   attached XDP program to see traffic)
-//
-// Permission reality (probed on the dev box, 2026-09): socket(AF_XDP) itself
-// needs CAP_NET_RAW here — the whole driver self-skips in tests/benches when
-// creation fails, and runs wherever the caps exist. TX needs no BPF program
-// (generic copy path); RX requires a program redirecting to the socket's
-// xskmap — an ops concern, not a library one.
-//
-// v1 semantics, deliberately honest (ADR-011): TX completions are matched to
-// ops FIFO (copy mode completes in order; zerocopy drivers that reorder will
-// need the per-chunk map — noted for v2), and TX submission triggers one
-// sendto() per write (batchable behind batch_scope later; copy mode's cost
-// profile is syscall-dominated either way).
+// include/iox/xdp/socket.h — the AF_XDP (XSK) driver handle (M6, design §六).
 #pragma once
 
 #include <linux/if_xdp.h>
@@ -49,7 +22,6 @@ namespace iox::xdp {
 
 namespace detail {
 
-// memory-mapped ring view (producer/consumer + descriptor array)
 template <class D>
 struct ring_view {
     std::uint32_t* producer = nullptr;
@@ -66,17 +38,12 @@ struct ring_view {
     std::uint32_t free() const noexcept { return mask + 1 - (cached_prod - cons()); }
 };
 
-} // namespace detail
+}
 
-/// The XDP socket: fd-mounted completion_source. All vocabulary completions
-/// flow through ctx.dispatch from on_ready().
 class socket final : public iox::completion_source {
 public:
     socket() noexcept = default;
     ~socket() override { reset(); }
-    // Movable like every iox handle, with the std::exchange pattern the
-    // other handles use — iox::fd is trivially copyable, so defaulted moves
-    // would double-close (red-team style P1). Never move while attached.
     socket(socket&& offsets) noexcept { move_from(offsets); }
     socket& operator=(socket&& offsets) noexcept {
         if (this != &offsets) {
@@ -88,8 +55,6 @@ public:
     socket(const socket&) = delete;
     socket& operator=(const socket&) = delete;
 
-    /// `ifname` + `queue_id` to bind; `ring_size` descriptors per ring.
-    /// XDP_COPY (generic path — no driver zerocopy, works on any device).
     static std::expected<socket, error> create(const umem& mem, const char* ifname,
                                                std::uint32_t queue_id,
                                                std::size_t ring_size) noexcept {
@@ -140,7 +105,6 @@ public:
             return std::unexpected(error::from_errno(errno));
         }
 
-        // every chunk starts on the fill ring (RX buffers) and the free list
         for (std::size_t i = 0; i < mem.chunk_count(); ++i) {
             s.free_chunks_.push_back(i * mem.chunk_size());
         }
@@ -150,8 +114,6 @@ public:
 
     bool valid() const noexcept { return fd_.valid(); }
 
-    // ---- completion_source (fd-mounted: the xsk fd is readable when any
-    // ring advances — RX packets or TX chunk returns) -----------------------
     iox::fd completion_fd() const noexcept override { return fd_; }
 
     void on_ready(io_context& ctx) noexcept override {
@@ -159,23 +121,16 @@ public:
         drain_rx(ctx);
     }
 
-    // ---- vocabulary surface -------------------------------------------------
-
-    /// Borrow a free chunk for TX (pair every tx_frame with a write_frame).
     frame tx_frame() noexcept {
         const std::uint64_t address = free_chunks_.back();
         free_chunks_.pop_back();
         return frame{mem_->chunk(address / chunk_size_), 0, address};
     }
 
-    /// Bytes of a umem address (RX descriptors arrive as addresses).
     std::byte* frame_data(std::uint64_t address) const noexcept {
         return mem_->chunk(address / chunk_size_);
     }
 
-    /// Park a TX op: the descriptor goes out now (sendto triggers the copy
-    /// path); completion arrives when the chunk returns on the completion
-    /// ring. Called from the op's start() on the io thread.
     void submit_tx(iox::op_base* op, std::uint64_t address, std::uint32_t len) noexcept {
         tx_waiters_.push_back(op);
         if (tx_.free() != 0) {
@@ -189,19 +144,14 @@ public:
         }
     }
 
-    /// Park an RX op; the frame arrives via the RX ring (needs an attached
-    /// XDP program to redirect packets here).
     void submit_rx(iox::op_base* op) noexcept { rx_waiters_.push_back(op); }
 
-    /// The frame that dispatched this RX op (xdp/read.h's thunk calls it from
-    /// on_done; public because op types live outside the class).
     ::xdp_desc take_pending_frame() noexcept {
         const ::xdp_desc d = pending_frames_.front();
         pending_frames_.erase(pending_frames_.begin());
         return d;
     }
 
-    /// Recycle a frame's chunk (TX frames recycle at completion).
     void recycle(const frame& f) noexcept { free_chunks_.push_back(f.umem_addr); }
 
     void reset() noexcept {
@@ -306,7 +256,7 @@ private:
             ++cons;
             iox::op_base* op = rx_waiters_.front();
             rx_waiters_.erase(rx_waiters_.begin());
-            pending_frames_.push_back(d); // thunk fetches by position
+            pending_frames_.push_back(d);
             ctx.dispatch(reinterpret_cast<std::uint64_t>(op), 0, 0);
         }
         __atomic_store_n(rx_.consumer, cons, __ATOMIC_RELEASE);
@@ -324,21 +274,19 @@ private:
     std::vector<iox::op_base*> rx_waiters_;
     std::vector<::xdp_desc> tx_backlog_;
     std::vector<::xdp_desc> pending_frames_;
-    void* ring_maps_[4]{}; // fill, comp, rx, tx mmap bases (reset() unmaps)
+    void* ring_maps_[4]{};
 };
 
-// ---- capabilities + registration -------------------------------------------
-
 inline bool tag_invoke(io::detail::supports_t, io::zero_copy_t, const socket&) noexcept {
-    return false; // copy mode v1; zerocopy needs driver + zerocopy bind
+    return false;
 }
 inline bool tag_invoke(io::detail::supports_t, io::dma_t, const socket&) noexcept {
-    return true; // packets land in umem by DMA (copy mode: via skb copy)
+    return true;
 }
 
-} // namespace iox::xdp
+}
 
 namespace iox::driver {
 template <>
 inline constexpr bool registered_driver<xdp::socket> = true;
-} // namespace iox::driver
+}

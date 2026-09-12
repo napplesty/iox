@@ -1,12 +1,5 @@
-// tests/test_nvme.cc — the NVMe reference driver against real hardware
-// (M6). The whole file self-skips when the passthru node is not accessible
-// (/dev/ng* is 0600 root by default; grant with an ACL or run as root) —
-// skipped cases print the reason and count as passed, so CI on hardware-less
-// machines stays green while the driver still compiles everywhere.
-//
-// Policy: READ-ONLY against the system disk. The write round-trip runs only
-// when IOX_NVME_TEST_WRITE=1 AND it targets the namespace's LAST LBA —
-// still: never point that at a disk you care about.
+// iox — unified async IO for Linux
+// tests/test_nvme.cc — (M6). The whole file self-skips when the passthru node is not accessible
 #include <doctest/doctest.h>
 
 #include <fcntl.h>
@@ -47,20 +40,20 @@ std::expected<nvme::device, error> open_test_device() {
     auto dev = std::move(*dev_opt);                                                           \
     REQUIRE(dev.valid());
 
-} // namespace
+}
 
 TEST_CASE("nvme: probe loads geometry (nsid, lba size, capacity)") {
     NVME_OR_SKIP()
     CHECK(dev.nsid() > 0);
     CHECK(dev.lba_size() >= 512);
     CHECK(dev.lba_size() <= 16384);
-    CHECK((dev.lba_size() & (dev.lba_size() - 1)) == 0); // power of two
+    CHECK((dev.lba_size() & (dev.lba_size() - 1)) == 0);
     CHECK(dev.lba_count() > 0);
-    CHECK(dev.size_bytes() > 1024ULL * 1024 * 1024); // this class of device
+    CHECK(dev.size_bytes() > 1024ULL * 1024 * 1024);
 }
 
 TEST_CASE("nvme: ops on a non-sqe128 ring are a typed EOPNOTSUPP up front") {
-    io_context plain; // default ring: 64-byte SQEs, no uring_cmd payload room
+    io_context plain;
     nvme::device inert; // invalid fd is fine: the op never reaches the kernel
     std::array<std::byte, 4096> buf{};
     auto r = ex::sync_wait(plain, io::read_at(plain, inert, wbytes{buf.data(), buf.size()},
@@ -79,12 +72,12 @@ TEST_CASE("nvme: read_at round-trips LBA0 bytes and is self-consistent") {
 
     auto r1 = ex::sync_wait(ctx, io::read_at(ctx, dev, wbytes{buf1.get(), len}, uoffset_t{0}));
     REQUIRE(r1);
-    CHECK(std::get<0>(*r1) == len); // the SAME contract as file read_at
+    CHECK(std::get<0>(*r1) == len);
 
     auto r2 = ex::sync_wait(ctx, io::read_at(ctx, dev, wbytes{buf2.get(), len}, uoffset_t{0}));
     REQUIRE(r2);
     CHECK(std::get<0>(*r2) == len);
-    CHECK(std::memcmp(buf1.get(), buf2.get(), len) == 0); // media is stable
+    CHECK(std::memcmp(buf1.get(), buf2.get(), len) == 0);
 }
 
 TEST_CASE("nvme: byte/LBA misalignment is a typed EINVAL, zero is a value 0") {
@@ -113,7 +106,7 @@ TEST_CASE("nvme: fsync is a CACHE FLUSH passthu (or a typed refusal)") {
     NVME_OR_SKIP()
     io_context ctx{uring::ring_params{.sqe128 = true}};
     auto r = ex::sync_wait(ctx, io::fsync(ctx, dev));
-    if (!r) { // an O_RDONLY node may refuse flush — anything else is a bug
+    if (!r) {
         REQUIRE(r.error);
         CHECK(r.error->code() == EACCES);
     }
@@ -132,7 +125,7 @@ TEST_CASE("nvme: write_at round-trip on the LAST LBA (explicit opt-in only)") {
     NVME_OR_SKIP()
     io_context ctx{uring::ring_params{.sqe128 = true}};
     const std::size_t len = dev.lba_size();
-    const std::uint64_t off = dev.size_bytes() - len; // last LBA, off the partitions
+    const std::uint64_t off = dev.size_bytes() - len;
     auto src = std::make_unique_for_overwrite<std::byte[]>(len);
     auto back = std::make_unique_for_overwrite<std::byte[]>(len);
     for (std::size_t i = 0; i < len; ++i) {
@@ -153,7 +146,7 @@ TEST_CASE("nvme: write_at round-trip on the LAST LBA (explicit opt-in only)") {
 #endif
 
 TEST_CASE("nvme: capability answers — device DMA is zero-copy direct") {
-    const nvme::device* d = nullptr; // supports() is type-dispatched only
+    const nvme::device* d = nullptr;
     CHECK(io::supports(io::zero_copy, *d));
     CHECK(io::supports(io::dma, *d));
     CHECK_FALSE(io::supports(io::mmap, *d));

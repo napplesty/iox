@@ -1,5 +1,5 @@
-// Integration tests for fs::file: positional and stream IO through the
-// unified vocabulary, typed open errors, fsync, deferred close.
+// iox — unified async IO for Linux
+// tests/test_fs.cc — unified vocabulary, typed open errors, fsync, deferred close.
 #include <doctest/doctest.h>
 
 #include <unistd.h>
@@ -32,7 +32,7 @@ std::string_view view_of(std::span<const std::byte> b, std::size_t n) {
     return std::string_view{reinterpret_cast<const char*>(b.data()), n};
 }
 
-} // namespace
+}
 
 TEST_CASE("file: write_at/read_at round trip") {
     io_context ctx;
@@ -56,7 +56,7 @@ TEST_CASE("file: write_at/read_at round trip") {
     CHECK(std::get<0>(*rd) == msg.size());
     CHECK(view_of(buf, std::get<0>(*rd)) == msg);
 
-    // positional reads must not interfere: read at an offset past the data
+  // positional reads must not interfere: read at an offset past the data
     std::array<std::byte, 8> tail{};
     auto rd2 = ex::sync_wait(ctx, io::read_at(ctx, f, wbytes{tail.data(), tail.size()},
                                               uoffset_t{6}));
@@ -98,7 +98,6 @@ TEST_CASE("file: stream read/write and fsync") {
     auto sync = ex::sync_wait(ctx, io::fsync(ctx, f));
     CHECK(sync);
 
-    // A second open (fresh file position) reads it back stream-style.
     auto rd_file = fs::file::open(path.value.c_str(), fs::mode::read);
     REQUIRE(rd_file);
     std::array<std::byte, 32> buf{};
@@ -106,7 +105,6 @@ TEST_CASE("file: stream read/write and fsync") {
     REQUIRE(rd);
     CHECK(view_of(buf, std::get<0>(*rd)) == msg);
 
-    // second read hits EOF
     auto rd2 = ex::sync_wait(ctx, io::read(ctx, *rd_file, wbytes{buf.data(), buf.size()}));
     REQUIRE(rd2);
     CHECK(std::get<0>(*rd2) == 0);
@@ -131,10 +129,7 @@ TEST_CASE("file: deferred close through the ring") {
 
     auto c = ex::sync_wait(ctx, io::close(ctx, f));
     REQUIRE(c);
-    CHECK_FALSE(f.valid()); // slot cleared by the close completion
+    CHECK_FALSE(f.valid());
     CHECK(f.read_handle().v == -1);
 
-    // after io::close the handle is inert: destructor must not double-close
-    // (kernel would have reused the fd number by then — a classic bug this
-    // design makes structurally impossible)
 }

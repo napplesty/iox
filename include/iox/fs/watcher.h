@@ -1,9 +1,5 @@
 // iox — unified async IO for Linux
-// fs/watcher.h — an inotify instance as a readable handle.
-//
-// The fd reads variable-length event records; io::read (the ordinary
-// vocabulary — nothing new needed) fills a byte buffer and fs::event_range
-// (inotify_event.h) walks it. Watches are (path, mask) → wd.
+// include/iox/fs/watcher.h — an inotify instance as a readable handle.
 #pragma once
 
 #include <cstdint>
@@ -47,10 +43,7 @@ public:
 
     bool valid() const noexcept { return fd_.valid(); }
 
-    /// Start watching `path` for `mask` events; returns the watch descriptor.
     std::expected<int, error> add(std::string_view path, std::uint32_t mask) const noexcept {
-        // inotify_add_watch takes a NUL-terminated path; string_view carries
-        // no guarantee of one, so copy (control path).
         const std::string p{path};
         const int wd = ::inotify_add_watch(fd_.v, p.c_str(), mask);
         if (wd < 0) {
@@ -61,7 +54,6 @@ public:
 
     void erase(int wd) const noexcept { (void)!::inotify_rm_watch(fd_.v, wd); }
 
-    // capability: readable — event records come out via io::read
     iox::fd read_handle() const noexcept { return fd_; }
     iox::fd* fd_slot() noexcept { return &fd_; }
 
@@ -80,4 +72,4 @@ private:
 
 static_assert(io::readable<watcher> && !io::writable<watcher> && !io::seekable<watcher>);
 
-} // namespace iox::fs
+}

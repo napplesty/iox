@@ -1,5 +1,5 @@
-// io::recv_from — receive one datagram; completes with (byte count, source
-// endpoint).
+// iox — unified async IO for Linux
+// include/iox/ops/recv_from.h — endpoint).
 #pragma once
 
 #include <sys/socket.h>
@@ -49,12 +49,9 @@ struct recv_from_policy {
     using complete = complete_from;
 };
 
-} // namespace detail
+}
 
 inline constexpr struct recv_from_t {
-    /// Customization point: drivers provide `tag_invoke(recv_from_t, ctx,
-    /// handle, wbytes)`; the fd default below serves socket-backed datagram
-    /// handles.
     template <class H>
     requires tag_invocable<recv_from_t, io_context&, H, wbytes>
     auto operator()(io_context& ctx, H&& h, wbytes dest) const
@@ -64,8 +61,6 @@ inline constexpr struct recv_from_t {
     }
 } recv_from{};
 
-// ---- fd driver default -----------------------------------------------------
-
 template <class H>
 requires datagram<std::remove_cvref_t<H>>
 auto tag_invoke(recv_from_t, io_context& ctx, H&& h, wbytes dest) noexcept {
@@ -74,4 +69,4 @@ auto tag_invoke(recv_from_t, io_context& ctx, H&& h, wbytes dest) noexcept {
     return detail::fd_sender<detail::recv_from_policy>{&ctx, h.datagram_handle(), a};
 }
 
-} // namespace iox::io
+}

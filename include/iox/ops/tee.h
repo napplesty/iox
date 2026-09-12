@@ -1,6 +1,5 @@
-// io::tee — duplicate bytes INSIDE two pipes (IORING_OP_TEE): pipe `in`'s
-// data is copied into pipe `out` without consuming it — the classic
-// multicast/tap primitive. Both fds must be pipes; count = bytes duplicated.
+// iox — unified async IO for Linux
+// include/iox/ops/tee.h — the classic
 #pragma once
 
 #include "iox/ops/fd_sender.h"
@@ -24,7 +23,7 @@ struct tee_policy {
             stdexec::set_value(std::move(r), std::size_t{0});
             return true;
         }
-        if (a.length > 0xFFFFFFFFULL) { // size_t -> unsigned truncation (design F3)
+        if (a.length > 0xFFFFFFFFULL) {
             stdexec::set_error(std::move(r), iox::error::from_errno(EOVERFLOW));
             return true;
         }
@@ -36,13 +35,9 @@ struct tee_policy {
     using complete = transfer_complete;
 };
 
-
-} // namespace detail
+}
 
 inline constexpr struct tee_t {
-    /// Customization point: drivers provide the full 5-parameter
-    /// `tag_invoke(tee_t, ctx, in, out, length, flags)`; the fd default below
-    /// serves raw pipe descriptors.
     template <class In, class Out>
     requires tag_invocable<tee_t, io_context&, In, Out, std::size_t, unsigned>
     auto operator()(io_context& ctx, In&& in, Out&& out, std::size_t length, unsigned flags = 0) const
@@ -55,8 +50,6 @@ inline constexpr struct tee_t {
     }
 } tee{};
 
-// ---- fd driver default -----------------------------------------------------
-
 template <class In, class Out>
 requires std::same_as<std::remove_cvref_t<In>, iox::fd> &&
          std::same_as<std::remove_cvref_t<Out>, iox::fd>
@@ -64,4 +57,4 @@ auto tag_invoke(tee_t, io_context& ctx, In&& in, Out&& out, std::size_t length, 
     return detail::fd_sender<detail::tee_policy>{&ctx, out, {in.v, static_cast<unsigned>(length), flags}};
 }
 
-} // namespace iox::io
+}

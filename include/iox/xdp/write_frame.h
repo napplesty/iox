@@ -1,7 +1,5 @@
 // iox — unified async IO for Linux
-// xdp/write_frame.h — xdp::write_frame(ctx, xsk, f): TX. A hand-rolled
-// op_base sender — the completion path IS the source bridge, no per-op SQE
-// (same shape as the M5 test device / example).
+// include/iox/xdp/write_frame.h — xdp::write_frame(ctx, xsk, f): TX. A hand-rolled
 #pragma once
 
 #include <cstdint>
@@ -28,14 +26,14 @@ struct tx_op final : iox::op_base {
 
     static void on_done(op_base* self, io_context&, std::int32_t, std::uint32_t) noexcept {
         auto* o = static_cast<tx_op*>(self);
-        o->xsk->recycle(o->f); // chunk is back: safe to hand out again
+        o->xsk->recycle(o->f);
         stdexec::set_value(std::move(o->r), o->f.len);
     }
 
     void start() noexcept { xsk->submit_tx(this, f.umem_addr, f.len); }
 };
 
-} // namespace detail
+}
 
 struct tx_sender {
     socket* xsk;
@@ -49,8 +47,6 @@ struct tx_sender {
     }
 };
 
-/// xdp::write_frame(ctx, xsk, f) — TX; completes with the byte count when
-/// the chunk has left the device (completion ring).
 struct write_frame_t {
     template <class S>
     requires std::same_as<S, socket>
@@ -60,4 +56,4 @@ struct write_frame_t {
 };
 inline constexpr write_frame_t write_frame{};
 
-} // namespace iox::xdp
+}

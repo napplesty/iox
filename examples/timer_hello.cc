@@ -1,7 +1,5 @@
-// timer_hello — M1 acceptance example: timers, schedule, and sender
-// composition. Runs entirely on the io thread of one io_context.
-//
-//     ./build/timer_hello
+// iox — unified async IO for Linux
+// examples/timer_hello.cc — composition. Runs entirely on the io thread of one io_context.
 #include <chrono>
 #include <cstdio>
 
@@ -20,7 +18,7 @@ int main() {
                 })
               | iox::exec::let_value([&] {
                     std::puts("tick 2 (t=200ms)");
-                    return iox::io::schedule(ctx); // hop back through the ring
+                    return iox::io::schedule(ctx);
                 })
               | iox::exec::then([&] {
                     std::puts("done");

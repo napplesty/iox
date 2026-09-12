@@ -1,17 +1,5 @@
 // iox — unified async IO for Linux
-// process/process.h — a spawned child: pid + pidfd.
-//
-// spawn() is posix_spawnp (PATH resolution, no fork-with-threads hazards)
-// with optional pipe wiring: hand over pipe ends and they become the child's
-// stdin/stdout/stderr; the parent's copies close when spawn returns. The
-// pidfd (Linux 5.3+) makes the child pollable and killable without pid
-// races — a recycled pid can never be signalled by mistake.
-//
-// The vocabulary drives the rest: io::wait_pid (ops/wait_pid.h) completes
-// with the exit status when the child dies; kill() is pidfd_send_signal.
-// Destruction does NOT kill or reap: a dropped process handle leaves the
-// child running (daemons want that), and wait_pid is the reaping path —
-// exactly one wait_pid per process.
+// include/iox/process/process.h — a spawned child: pid + pidfd.
 #pragma once
 
 #include <cstdint>
@@ -36,11 +24,10 @@ namespace iox::process {
 
 class process {
 public:
-    /// Pipe wiring for spawn: each end moved in becomes the child's fd 0/1/2.
     struct io_plan {
-        std::optional<pipe::read_end> in;  // becomes the child's stdin
-        std::optional<pipe::write_end> out; // child's stdout
-        std::optional<pipe::write_end> err; // child's stderr
+        std::optional<pipe::read_end> in;
+        std::optional<pipe::write_end> out;
+        std::optional<pipe::write_end> err;
     };
 
     static std::expected<process, error> spawn(std::initializer_list<std::string_view> argv,
@@ -73,8 +60,6 @@ public:
         const int result = ::posix_spawnp(&pid, raw[0], &file_actions, nullptr,
                                       const_cast<char**>(raw.data()), environ);
         ::posix_spawn_file_actions_destroy(&file_actions);
-        // The moved-in pipe ends close here (io destructs): the child holds
-        // its dup'd copies from here on.
         io = {};
         if (result != 0) {
             return std::unexpected(error::from_errno(result));
@@ -110,10 +95,9 @@ public:
     bool valid() const noexcept { return pidfd_.valid(); }
 
     ::pid_t pid() const noexcept { return pid_; }
-    /// The pollable handle: io::wait_pid arms IORING_OP_POLL_ADD on it.
     iox::fd pidfd() const noexcept { return pidfd_; }
 
-    /// Signal the child through the pidfd — race-free by construction.
+  // Signal the child through the pidfd — race-free by construction.
     std::expected<void, error> kill(int sig) const noexcept {
         if (::syscall(SYS_pidfd_send_signal, pidfd_.v, sig, nullptr, 0) != 0) {
             return std::unexpected(error::from_errno(errno));
@@ -136,4 +120,4 @@ private:
     iox::fd pidfd_{};
 };
 
-} // namespace iox::process
+}

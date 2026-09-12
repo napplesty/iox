@@ -1,5 +1,5 @@
-// Registered-memory tests: buffer_pool + the type-driven zero-copy
-// (IORING_OP_*_FIXED) read/write paths over pipe ends and files.
+// iox — unified async IO for Linux
+// tests/test_mr.cc — (IORING_OP_*_FIXED) read/write paths over pipe ends and files.
 #include <doctest/doctest.h>
 
 #include <unistd.h>
@@ -21,7 +21,7 @@ namespace {
 std::string_view view_of(std::span<const std::byte> b, std::size_t n) {
     return std::string_view{reinterpret_cast<const char*>(b.data()), n};
 }
-} // namespace
+}
 
 TEST_CASE("buffer_pool: fixed write/read round trip on pipe") {
     io_context ctx;
@@ -41,8 +41,6 @@ TEST_CASE("buffer_pool: fixed write/read round trip on pipe") {
     ::memset(wbuf->data, 0, wbuf->size);
     ::memcpy(wbuf->data, msg.data(), msg.size());
 
-    // The registered_buffer overload selects IORING_OP_WRITE_FIXED and
-    // transfers the whole slot — the fixed-op contract.
     auto wr = ex::sync_wait(ctx, io::write(ctx, p->w, *wbuf));
     REQUIRE(wr);
     CHECK(std::get<0>(*wr) == wbuf->size);
@@ -56,7 +54,6 @@ TEST_CASE("buffer_pool: fixed write/read round trip on pipe") {
     pool->give_back(*rbuf);
     CHECK(pool->available() == 4);
 
-    // double give_back is ignored deterministically
     pool->give_back(*wbuf);
     CHECK(pool->available() == 4);
 }
@@ -89,7 +86,7 @@ TEST_CASE("buffer_pool: one table per ring") {
     REQUIRE_FALSE(second);
     CHECK(second.error().code() == EBUSY);
 
-    first->reset(); // unregisters
+    first->reset();
     auto third = buffer_pool::create(ctx, 4096, 2);
     REQUIRE(third);
 }

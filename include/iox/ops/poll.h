@@ -1,6 +1,5 @@
-// io::poll — readiness wait (IORING_OP_POLL_ADD); completes with the
-// revents bitmask. The wake-up seam blocking_pool and external completion
-// sources build on.
+// iox — unified async IO for Linux
+// include/iox/ops/poll.h — revents bitmask. The wake-up seam blocking_pool and external completion
 #pragma once
 
 #include <poll.h>
@@ -24,13 +23,9 @@ struct poll_policy {
     using complete = revents_complete;
 };
 
-
-} // namespace detail
+}
 
 inline constexpr struct poll_t {
-    /// Customization point: drivers provide `tag_invoke(poll_t, ctx,
-    /// handle, events)` for their own handle types; the fd default below
-    /// serves raw descriptors.
     template <class H>
     requires tag_invocable<poll_t, io_context&, H, short>
     auto operator()(io_context& ctx, H&& h, short events) const
@@ -40,12 +35,10 @@ inline constexpr struct poll_t {
     }
 } poll{};
 
-// ---- fd driver default -----------------------------------------------------
-
 template <class H>
 requires std::same_as<std::remove_cvref_t<H>, iox::fd>
 auto tag_invoke(poll_t, io_context& ctx, H&& h, short events) noexcept {
     return detail::fd_sender<detail::poll_policy>{&ctx, h, {events}};
 }
 
-} // namespace iox::io
+}

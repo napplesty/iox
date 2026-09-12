@@ -1,7 +1,5 @@
 // iox — unified async IO for Linux
-// xdp/read.h — xdp::read(ctx, xsk): RX. A hand-rolled op_base sender — the
-// completion path IS the source bridge, no per-op SQE (same shape as the M5
-// test device / example).
+// include/iox/xdp/read.h — the
 #pragma once
 
 #include <utility>
@@ -33,7 +31,7 @@ struct rx_op final : iox::op_base {
     void start() noexcept { xsk->submit_rx(this); }
 };
 
-} // namespace detail
+}
 
 struct rx_sender {
     socket* xsk;
@@ -46,7 +44,6 @@ struct rx_sender {
     }
 };
 
-/// xdp::read(ctx, xsk) — RX; completes with the received frame.
 inline constexpr struct read_t {
     template <class S>
     requires std::same_as<S, socket>
@@ -55,4 +52,4 @@ inline constexpr struct read_t {
     }
 } read{};
 
-} // namespace iox::xdp
+}

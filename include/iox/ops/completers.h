@@ -1,7 +1,5 @@
 // iox — unified async IO for Linux
-// ops/completers.h — the completion helpers policies plug into
-// fd_sender's skeleton: res<0 → set_error, res>=0 → a value shape per
-// operation family.
+// include/iox/ops/completers.h — the completion helpers policies plug into
 #pragma once
 
 #include <cstddef>
@@ -25,7 +23,7 @@ struct void_complete {
     }
 };
 
-struct transfer_complete { // read/write families: value = byte count
+struct transfer_complete {
     template <class R, class A>
     static void complete(R& r, std::int32_t res, const A&) noexcept {
         if (res < 0) {
@@ -36,7 +34,7 @@ struct transfer_complete { // read/write families: value = byte count
     }
 };
 
-struct revents_complete { // poll: value = revents bitmask
+struct revents_complete {
     template <class R, class A>
     static void complete(R& r, std::int32_t res, const A&) noexcept {
         if (res < 0) {
@@ -47,7 +45,7 @@ struct revents_complete { // poll: value = revents bitmask
     }
 };
 
-struct deadline_complete { // timeout: -ETIME means "fired", i.e. success
+struct deadline_complete {
     template <class R, class A>
     static void complete(R& r, std::int32_t res, const A&) noexcept {
         if (res == -ETIME || res == 0) {
@@ -58,4 +56,4 @@ struct deadline_complete { // timeout: -ETIME means "fired", i.e. success
     }
 };
 
-} // namespace iox::io::detail
+}

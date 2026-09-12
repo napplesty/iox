@@ -1,5 +1,5 @@
-// io::write_at — positional write (seekable objects: files). uoffset_t is a
-// strong type: passing a size where an offset belongs does not compile.
+// iox — unified async IO for Linux
+// include/iox/ops/write_at.h — strong type: passing a size where an offset belongs does not compile.
 #pragma once
 
 #include "iox/core/buffer.h"
@@ -18,9 +18,6 @@ struct write_at_policy {
     };
     using signatures = stdexec::completion_signatures<stdexec::set_value_t(std::size_t),
                                                 stdexec::set_error_t(iox::error), stdexec::set_stopped_t()>;
-    // Offsets that wrap negative (UINT64_MAX -> -1 = "current position"
-    // sentinel) are rejected up front (red-team F3): a positional write
-    // must never silently land at the stream position.
     template <class R>
     static bool immediate(R& r, args_t& a) noexcept {
         if (a.offset < 0) {
@@ -35,13 +32,9 @@ struct write_at_policy {
     using complete = transfer_complete;
 };
 
-
-} // namespace detail
+}
 
 inline constexpr struct write_at_t {
-    /// Customization point: drivers provide `tag_invoke(write_at_t, ctx,
-    /// handle, rbytes, uoffset_t)` for their own handle types; the fd
-    /// default below serves seekable fd-backed handles.
     template <class H>
     requires tag_invocable<write_at_t, io_context&, H, rbytes, uoffset_t>
     auto operator()(io_context& ctx, H&& h, rbytes src, uoffset_t at) const
@@ -51,8 +44,6 @@ inline constexpr struct write_at_t {
     }
 } write_at{};
 
-// ---- fd driver default -----------------------------------------------------
-
 template <class H>
 requires std::same_as<std::remove_cvref_t<H>, iox::fd> || write_seekable<std::remove_cvref_t<H>>
 auto tag_invoke(write_at_t, io_context& ctx, H&& h, rbytes src, uoffset_t at) noexcept {
@@ -60,4 +51,4 @@ auto tag_invoke(write_at_t, io_context& ctx, H&& h, rbytes src, uoffset_t at) no
         &ctx, detail::writer_fd(h), {src, static_cast<std::int64_t>(at.v)}};
 }
 
-} // namespace iox::io
+}

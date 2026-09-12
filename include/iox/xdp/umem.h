@@ -1,8 +1,5 @@
 // iox — unified async IO for Linux
-// xdp/umem.h — the shared packet memory an AF_XDP socket moves chunks
-// through: `frame` (a chunk reference) + `umem` (the mmap'd region the
-// kernel DMAs into). Driver handle lives in xdp/socket.h, vocabulary in
-// xdp/read.h and xdp/write_frame.h.
+// include/iox/xdp/umem.h — the shared packet memory an AF_XDP socket moves chunks
 #pragma once
 
 #include <sys/mman.h>
@@ -16,16 +13,12 @@
 
 namespace iox::xdp {
 
-/// One umem chunk reference: the packet's bytes at `data`, its umem-relative
-/// address for the rings. Returned by xdp::read, consumed by
-/// xdp::write_frame; the socket recycles the chunk when the op completes.
 struct frame {
     std::byte* data = nullptr;
     std::uint32_t len = 0;
     std::uint64_t umem_addr = 0;
 };
 
-/// The shared packet memory + the kernel-side fill/completion rings.
 class umem {
 public:
     umem() noexcept = default;
@@ -41,8 +34,6 @@ public:
     umem(const umem&) = delete;
     umem& operator=(const umem&) = delete;
 
-    /// `chunks` × `chunk_size` bytes (chunk_size ≥ 2048; 4096 is the sane
-    /// default).
     static std::expected<umem, error> create(std::size_t chunks, std::size_t chunk_size) noexcept {
         umem m;
         m.chunk_size_ = chunk_size;
@@ -82,4 +73,4 @@ private:
     std::size_t chunk_count_ = 0;
 };
 
-} // namespace iox::xdp
+}

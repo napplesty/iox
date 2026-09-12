@@ -1,13 +1,5 @@
 // iox — unified async IO for Linux
-// buffer.h — direction-typed buffer views (design §四.②).
-//
-// The direction of a transfer lives in the type: wview<T> is where data may
-// be written (destination of read/recv), rview<T> is where data is read from
-// (source of write/send). Passing the wrong direction does not compile —
-// e.g. io::read(ctx, fd, rview) is rejected by overload resolution.
-//
-// Views never own memory. Registered-memory views (iox::mr) arrive in M2 and
-// will carry registration metadata so zero-copy paths are type-driven.
+// include/iox/core/buffer.h — direction-typed buffer views (design §四.②).
 #pragma once
 
 #include <cstddef>
@@ -70,7 +62,6 @@ public:
     template <class U>
     rview(std::span<const U> s) noexcept : data_(s.data()), size_(s.size()) {}
 
-    /// A wview is always usable as a read source.
     template <class U>
     rview(wview<U> w) noexcept : data_(w.data()), size_(w.size()) {}
 
@@ -97,14 +88,9 @@ private:
 using wbytes = wview<std::byte>;
 using rbytes = rview<std::byte>;
 
-/// A buffer carved out of an iox::buffer_pool whose pages are registered
-/// with the context's io_uring instance. Handing this (instead of plain
-/// wbytes/rbytes) to io::read/io::write selects the registered-buffer
-/// zero-copy path (IORING_OP_*_FIXED) automatically — the choice is driven
-/// by the type, not a runtime flag (design §四.②).
 struct registered_buffer {
-    std::uint32_t index = 0;  // registered table index for _FIXED ops
-    void* owner = nullptr;    // owning buffer_pool (for statistics/debug)
+    std::uint32_t index = 0;
+    void* owner = nullptr;
     std::byte* data = nullptr;
     std::size_t size = 0;
 
@@ -113,7 +99,6 @@ struct registered_buffer {
     rbytes readable_first(std::size_t n) const noexcept { return readable().first(n); }
 };
 
-/// byte_cast helpers (no-copy retype; byte round-trips stay explicit)
 template <class T>
 wbytes as_wbytes(wview<T> w) noexcept {
     return wbytes{reinterpret_cast<std::byte*>(w.data()), w.size() * sizeof(T)};
@@ -132,4 +117,4 @@ inline rbytes as_rbytes(std::span<const char> s) noexcept {
 inline wbytes as_wbytes(std::span<std::byte> s) noexcept { return wbytes{s}; }
 inline rbytes as_rbytes(std::span<const std::byte> s) noexcept { return rbytes{s}; }
 
-} // namespace iox
+}

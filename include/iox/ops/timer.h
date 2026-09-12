@@ -1,6 +1,5 @@
-// io::sleep_for / io::sleep_until — one-shot timeouts on the ring
-// (IORING_OP_TIMEOUT). The timespec lives inside the op; the kernel reads it
-// lazily, so the sender can be moved freely before start.
+// iox — unified async IO for Linux
+// include/iox/ops/timer.h — (IORING_OP_TIMEOUT). The timespec lives inside the op; the kernel reads it
 #pragma once
 
 #include <chrono>
@@ -20,7 +19,7 @@ inline __kernel_timespec to_kernel_ts(std::chrono::nanoseconds d) noexcept {
 
 struct timeout_policy {
     struct args_t {
-        __kernel_timespec ts{}; // stored inside the op: kernel reads it lazily
+        __kernel_timespec ts{};
     };
     using signatures = stdexec::completion_signatures<stdexec::set_value_t(),
                                                 stdexec::set_error_t(iox::error), stdexec::set_stopped_t()>;
@@ -32,7 +31,7 @@ struct timeout_policy {
 
 using sleep_sender = fd_sender<timeout_policy>;
 
-} // namespace detail
+}
 
 inline constexpr struct sleep_for_t {
     detail::sleep_sender operator()(io_context& ctx,
@@ -48,4 +47,4 @@ inline constexpr struct sleep_until_t {
     }
 } sleep_until{};
 
-} // namespace iox::io
+}

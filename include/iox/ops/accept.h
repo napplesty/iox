@@ -1,7 +1,5 @@
-// io::accept — accept one connection on an acceptable handle; the value is
-// the acceptor's own socket type, adopted from the raw accepted fd.
-// (Multishot accept changes the programming model to event streams —
-// tracked for the stream abstraction in a later milestone.)
+// iox — unified async IO for Linux
+// include/iox/ops/accept.h — the acceptor's own socket type, adopted from the raw accepted fd.
 #pragma once
 
 #include <sys/socket.h>
@@ -36,12 +34,9 @@ struct accept_policy {
     using complete = adopt_complete<Socket>;
 };
 
-} // namespace detail
+}
 
 inline constexpr struct accept_t {
-    /// Customization point: drivers provide `tag_invoke(accept_t, ctx,
-    /// handle)` for their own acceptor types; the fd default below serves
-    /// socket-backed acceptors.
     template <class H>
     requires tag_invocable<accept_t, io_context&, H>
     auto operator()(io_context& ctx, H&& h) const
@@ -51,8 +46,6 @@ inline constexpr struct accept_t {
     }
 } accept{};
 
-// ---- fd driver default -----------------------------------------------------
-
 template <class H>
 requires acceptable<std::remove_cvref_t<H>>
 auto tag_invoke(accept_t, io_context& ctx, H&& h) noexcept {
@@ -60,4 +53,4 @@ auto tag_invoke(accept_t, io_context& ctx, H&& h) noexcept {
     return detail::fd_sender<detail::accept_policy<sock_t>>{&ctx, h.accept_handle(), {}};
 }
 
-} // namespace iox::io
+}

@@ -1,16 +1,5 @@
 // iox — unified async IO for Linux
-// blocking_pool.h — the blocking escape hatch (design §二 L2).
-//
-// Some APIs have no async form (getaddrinfo, and plenty of third-party
-// code). blocking_pool moves such calls to worker threads and delivers the
-// result back onto the io thread through an eventfd — so blocking work
-// composes with the vocabulary like any other sender.
-//
-//     blocking_pool pool(ctx);
-//     auto r = exec::sync_wait(ctx, pool.run([]{ return ::getenv("HOME"); }));
-//
-// The pool must outlive every operation it runs. Callables must return a
-// value; exceptions propagate as set_error(exception_ptr).
+// include/iox/runtime/blocking_pool.h — the blocking escape hatch (design §二 L2).
 #pragma once
 
 #include <poll.h>
@@ -53,7 +42,7 @@ public:
     ~blocking_pool() {
         {
             std::lock_guard lock{mtx_};
-            stopping_ = true; // also gates re-arm in drain_and_rearm()
+            stopping_ = true;
             cv_.notify_all();
         }
         for (auto& w : workers_) {
@@ -62,12 +51,6 @@ public:
             }
         }
         if (efd_ >= 0) {
-            // Retire the resident wakeup op BEFORE freeing it: closing the
-            // fd does not wake an in-flight poll (the ring pins the file),
-            // so poke the eventfd instead — the poll completes, delivers
-            // whatever the workers produced, and (stopping_) skips re-arming.
-            // Without this, the next pump on a still-alive ctx dispatched
-            // into freed pool memory (red-team t2/t2b: heap-use-after-free).
             if (wakeup_) {
                 const std::uint64_t one = 1;
                 (void)!::write(efd_, &one, sizeof(one));
@@ -75,9 +58,6 @@ public:
                 ctx_->run_for(std::chrono::milliseconds(100));
             }
             wakeup_.reset();
-            // Undelivered cells: their owners are gone with the pool; free
-            // the memory (their ops leak by contract — destroy the pool only
-            // after its run() senders completed).
             {
                 std::lock_guard lock{mtx_};
                 for (task_base* t : done_) {
@@ -95,12 +75,10 @@ public:
     bool ok() const noexcept { return efd_ >= 0; }
 
     struct task_base {
-        virtual void execute() noexcept = 0; // worker thread
+        virtual void execute() noexcept = 0;
         virtual void deliver() noexcept = 0; // io thread
         virtual ~task_base() = default;
     };
-
-    // ---- sender side ------------------------------------------------------
 
     template <class F>
     struct sender {
@@ -120,7 +98,7 @@ public:
         struct op final {
             blocking_pool* pool;
             F func;
-            void* held = nullptr; // in-flight cell (opaque token)
+            void* held = nullptr;
             R r;
 
             using operation_state_concept = stdexec::operation_state_tag;
@@ -131,7 +109,6 @@ public:
             void start() noexcept;
         };
 
-        /// Single-use heap cell shared with the worker: lives until deliver().
         template <class R>
         struct cell final : task_base {
             using op_t = op<R>;
@@ -153,8 +130,8 @@ public:
 
             void deliver() noexcept override {
                 op_t* o = owner;
-                auto e = std::move(exception);        // move results out BEFORE the
-                std::optional<value_t> v = std::move(value); // cell frees itself
+                auto e = std::move(exception);
+                std::optional<value_t> v = std::move(value);
                 delete this;
                 if (e) {
                     stdexec::set_error(std::move(o->r), std::move(e));
@@ -171,15 +148,12 @@ public:
         }
     };
 
-    /// Run `f` on a worker thread; completes on the io thread with f()'s
-    /// value (or its exception as set_error(exception_ptr)).
     template <class F>
     sender<std::decay_t<F>> run(F&& f) {
         return {this, std::forward<F>(f)};
     }
 
 private:
-    /// Queue a task for a worker (used by sender op states).
     void submit(task_base* t) noexcept {
         {
             std::lock_guard lock{mtx_};
@@ -188,8 +162,6 @@ private:
         cv_.notify_one();
     }
 
-    // ---- worker side ------------------------------------------------------
-
     void worker_loop() noexcept {
         for (;;) {
             task_base* t = nullptr;
@@ -197,7 +169,7 @@ private:
                 std::unique_lock lock{mtx_};
                 cv_.wait(lock, [this] { return stopping_ || !pending_.empty(); });
                 if (pending_.empty()) {
-                    return; // stopping_
+                    return;
                 }
                 t = pending_.front();
                 pending_.pop_front();
@@ -211,8 +183,6 @@ private:
             (void)!::write(efd_, &one, sizeof(one));
         }
     }
-
-    // ---- io side: eventfd wakeup → drain → deliver → re-arm ----------------
 
     struct wakeup_receiver {
         using receiver_concept = stdexec::receiver_tag;
@@ -243,7 +213,7 @@ private:
             t->deliver();
         }
         if (!stopping_) {
-            arm_wakeup(); // at teardown: let the wakeup op die with us
+            arm_wakeup();
         }
     }
 
@@ -275,4 +245,4 @@ void blocking_pool::sender<F>::op<R>::start() noexcept {
     pool->submit(c);
 }
 
-} // namespace iox
+}

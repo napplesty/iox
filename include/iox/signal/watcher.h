@@ -1,10 +1,5 @@
 // iox — unified async IO for Linux
-// signal/watcher.h — the signalfd half of signal handling.
-//
-// One watcher owns one signalfd over a signal::set's mask. io::signal
-// (ops/signal.h) waits on it and completes with the consumed
-// signalfd_siginfo; plain io::read also works (the fd is readable) but
-// yields raw bytes. Destroy the watcher before the set (see set.h).
+// include/iox/signal/watcher.h — the signalfd half of signal handling.
 #pragma once
 
 #include <sys/signalfd.h>
@@ -46,7 +41,6 @@ public:
 
     bool valid() const noexcept { return fd_.valid(); }
 
-    // capability: readable — io::signal is the typed reader (siginfo, not bytes)
     iox::fd read_handle() const noexcept { return fd_; }
     iox::fd* fd_slot() noexcept { return &fd_; }
 
@@ -65,4 +59,4 @@ private:
 
 static_assert(io::readable<watcher> && !io::writable<watcher> && !io::seekable<watcher>);
 
-} // namespace iox::signal
+}

@@ -1,5 +1,5 @@
-// Integration tests for the process module: spawn with pipe wiring,
-// pidfd-based wait, race-free kill, typed exec errors.
+// iox — unified async IO for Linux
+// tests/test_process.cc — pidfd-based wait, race-free kill, typed exec errors.
 #include <doctest/doctest.h>
 
 #include <signal.h>
@@ -24,8 +24,8 @@ namespace ex = iox::exec;
 
 TEST_CASE("process: spawn cat, pipe in/out round trip, clean exit") {
     io_context ctx;
-    auto to_child = pipe::pair::create(); // parent writes → child stdin
-    auto from_child = pipe::pair::create(); // child stdout → parent reads
+    auto to_child = pipe::pair::create();
+    auto from_child = pipe::pair::create();
     REQUIRE(to_child);
     REQUIRE(from_child);
 
@@ -38,7 +38,7 @@ TEST_CASE("process: spawn cat, pipe in/out round trip, clean exit") {
     const std::string_view msg = "hello through iox pipes\n";
     auto wr = ex::sync_wait(ctx, io::write_all(ctx, to_child->w, as_rbytes(std::span{msg})));
     REQUIRE(wr);
-    to_child->w.reset(); // cat exits on stdin EOF
+    to_child->w.reset();
 
     std::array<std::byte, 128> buf{};
     std::string got;
@@ -65,11 +65,11 @@ TEST_CASE("process: wait_pid completes asynchronously when the child dies") {
     REQUIRE(p);
 
     const auto t0 = std::chrono::steady_clock::now();
-    auto st = ex::sync_wait(ctx, io::wait_pid(ctx, *p)); // armed before exit
+    auto st = ex::sync_wait(ctx, io::wait_pid(ctx, *p));
     const auto elapsed = std::chrono::steady_clock::now() - t0;
     REQUIRE(st);
     CHECK(std::get<0>(*st).success());
-    CHECK(elapsed >= 90ms); // it really waited for the child
+    CHECK(elapsed >= 90ms);
 }
 
 TEST_CASE("process: kill is race-free and wait reports the signal") {
@@ -94,7 +94,6 @@ TEST_CASE("process: exec failure is a typed error, no child leaks") {
 
 TEST_CASE("process: spawn without wiring inherits stdio (no pipes closed)") {
     io_context ctx;
-    // true(1) needs no io and exits 0 immediately.
     auto p = process::process::spawn({"/usr/bin/true"});
     REQUIRE(p);
     auto st = ex::sync_wait(ctx, io::wait_pid(ctx, *p));

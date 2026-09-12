@@ -1,15 +1,5 @@
 // iox — unified async IO for Linux
-// mr.h — buffer_pool: registered memory (design §四.②, §三.⑤⑥).
-//
-// A pool owns one aligned allocation and registers it with the context's
-// io_uring instance (io_uring_register_buffers). Buffers carved from the
-// pool carry their table index in the type (iox::registered_buffer), so
-// io::read/io::write automatically take the IORING_OP_*_FIXED zero-copy
-// paths — no runtime flag, no guessing.
-//
-// M2 constraint (kernel semantics): io_uring holds one registered-buffer
-// table per ring, so a context hosts at most one pool; registration is a
-// ring-wide operation.
+// include/iox/core/mr.h — buffer_pool: registered memory (design §四.②, §三.⑤⑥).
 #pragma once
 
 #include <liburing.h>
@@ -29,9 +19,6 @@ class buffer_pool {
 public:
     buffer_pool() noexcept = default;
 
-    /// Allocate `slots` buffers of `slot_size` bytes (each aligned to
-    /// `alignment`, page-aligned by default — safe for O_DIRECT) and
-    /// register them with `ctx`'s ring.
     static std::expected<buffer_pool, error> create(io_context& ctx,
                                                     std::size_t slot_size,
                                                     std::size_t slots,
@@ -43,7 +30,6 @@ public:
             return std::unexpected(error::from_errno(EBADF));
         }
         if (ctx.buffers_registered()) {
-            // one table per ring (see header comment)
             return std::unexpected(error::from_errno(EBUSY));
         }
 
@@ -106,8 +92,6 @@ public:
     buffer_pool(const buffer_pool&) = delete;
     buffer_pool& operator=(const buffer_pool&) = delete;
 
-    /// Take an available slot. The returned buffer keeps the slot checked
-    /// out until give_back().
     std::expected<registered_buffer, error> take() noexcept {
         if (free_.empty()) {
             return std::unexpected(error::from_errno(EBUSY));
@@ -119,15 +103,13 @@ public:
             slot_size_};
     }
 
-    /// Return a slot (single-threaded; returning a foreign/duplicate slot is
-    /// a programming error detected by debug builds via double-entry scan).
     void give_back(const registered_buffer& b) noexcept {
         if (b.owner != this || b.index >= slots_) {
             return;
         }
         for (const auto f : free_) {
             if (f == b.index) {
-                return; // double give_back — ignore deterministically
+                return;
             }
         }
         free_.push_back(b.index);
@@ -162,4 +144,4 @@ private:
     std::vector<std::uint32_t> free_;
 };
 
-} // namespace iox
+}

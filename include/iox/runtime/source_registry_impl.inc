@@ -1,9 +1,5 @@
 // iox — unified async IO for Linux
-// runtime/source_registry_impl.inc — the method bodies of source_registry,
-// defined after class io_context is complete (they call its public
-// acquire_sqe/submit_cancel). TEXTUALLY INCLUDED at the bottom of
-// io_context.h — do not include it anywhere else.
-// ---- source_registry bodies (two-phase: need a complete io_context) --------
+// include/iox/runtime/source_registry_impl.inc — the method bodies of source_registry,
 
 inline source_registry::source_registry() noexcept {
     busy_tick_.registry = this;
@@ -27,7 +23,7 @@ inline void source_registry::source_watch::on_fired(op_base* self, io_context& c
         return;
     }
     if (res > 0) {
-        w.source->on_ready(ctx); // may detach this very source
+        w.source->on_ready(ctx);
     }
     if (!w.retiring) {
         w.arm(ctx);
@@ -42,11 +38,8 @@ inline void source_registry::busy_tick::on_fired(op_base* self, io_context& ctx,
     auto& t = *static_cast<busy_tick*>(self);
     t.in_flight = false;
     if (res == -ECANCELED || res == -512) {
-        return; // stopped; a later attach re-arms
+        return;
     }
-    // index walk: on_ready may detach (erase) mid-loop — erased
-    // slots only shift the tail, the pointed-to sources stay alive
-    // inside their own call.
     for (std::size_t i = 0; i < t.registry->busy_sources_.size(); ++i) {
         completion_source* s = t.registry->busy_sources_[i];
         if (s->has_work()) {
@@ -139,4 +132,3 @@ inline bool source_registry::attached(const completion_source& s) const noexcept
     }
     return false;
 }
-

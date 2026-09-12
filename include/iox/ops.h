@@ -1,11 +1,5 @@
 // iox — unified async IO for Linux
-// ops.h — the unified vocabulary, one include for every operation
-// (design §二 L3).
-//
-// Each operation is a minimal unit header under iox/ops/ (one CPO + its
-// policy per file, plus fd_sender.h for the shared skeleton); include
-// those directly when you want a narrower dependency. Combinators built on
-// the vocabulary (loop / detach / write_all) live in iox/compose/.
+// include/iox/ops.h — the unified vocabulary, one include for every operation
 #pragma once
 
 #include "iox/ops/accept.h"

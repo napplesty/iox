@@ -1,10 +1,5 @@
 // iox — unified async IO for Linux
 // tests/support/softdev.h — the software test device for the Driver SPI
-// suite: pending ops park in a queue; readiness arrives by mode — fd_mounted
-// (producer thread rings an eventfd doorbell), busy_slot (io_context polls
-// has_work()), or active (io-thread continuation dispatches directly).
-// Shared by tests/test_driver.cc; the tutorial-shaped single-file version
-// lives in examples/eventfd_device.cc.
 #pragma once
 
 #include <atomic>
@@ -26,18 +21,8 @@ using namespace std::chrono_literals;
 namespace ex = iox::exec;
 using namespace iox;
 
-
 namespace softdev {
 
-// ---------------------------------------------------------------------------
-// The device: pending ops park in a queue; readiness arrives by MODE —
-//   fd_mounted : a producer thread rings an eventfd doorbell (the "IRQ fd"
-//                hardware shape; pending_ is cross-thread, mutex-guarded)
-//   busy_slot  : readiness arrives with TIME (a device with neither fd nor
-//                thread; io_context polls has_work() every ~1 ms)
-//   active     : driver code already on the io thread (a timer continuation
-//                here) dispatches directly — no attachment at all
-// ---------------------------------------------------------------------------
 class device;
 
 struct handle {
@@ -62,12 +47,11 @@ public:
     device(const device&) = delete;
     device& operator=(const device&) = delete;
 
-    // ---- completion_source --------------------------------------------------
     iox::fd completion_fd() const noexcept override {
         return mode_ == mode::fd_mounted ? iox::fd{efd_} : iox::fd{};
     }
 
-    // busy mode only — io thread; no cross-thread state in this mode.
+  // busy mode only — io thread; no cross-thread state in this mode.
     bool has_work() const noexcept override {
         const auto now = std::chrono::steady_clock::now();
         for (const auto& p : pending_) {
@@ -81,39 +65,31 @@ public:
     void on_ready(io_context& ctx) noexcept override {
         if (mode_ == mode::fd_mounted) {
             std::uint64_t n = 0;
-            const ssize_t drained = ::read(efd_, &n, sizeof(n)); // drain the doorbell
+            const ssize_t drained = ::read(efd_, &n, sizeof(n));
             (void)drained;
         }
         drain_ready(ctx);
         if (self_detach_) {
-            // Documented legal: detaching from inside on_ready retires the
-            // watch through the cancel path; the tick's index walk tolerates
-            // the mid-loop erase.
             ctx.detach_source(*this);
         }
     }
 
-    // ---- driver API ---------------------------------------------------------
-    // Called from the op's start() on the io thread.
     void submit(iox::op_base* op) {
         const auto now = std::chrono::steady_clock::now();
         std::lock_guard lk(mu_);
         switch (mode_) {
         case mode::fd_mounted:
-            // Not ready until the producer rings; a produce() that raced
-            // ahead of submit still counts.
             pending_.push_back({op, record_ready_ ? now : kNever});
             break;
         case mode::busy_slot:
-            pending_.push_back({op, now + 8ms}); // "hardware" finishes by itself
+            pending_.push_back({op, now + 8ms});
             break;
         case mode::active:
-            pending_.push_back({op, now}); // drained by complete_now()
+            pending_.push_back({op, now});
             break;
         }
     }
 
-    // Producer thread (fd mode): one record became ready — ring the doorbell.
     void produce() {
         {
             std::lock_guard lk(mu_);
@@ -128,8 +104,6 @@ public:
         (void)rang;
     }
 
-    // Io thread, active mode: driver code running on the loop thread
-    // dispatches its parked completions directly (no attachment needed).
     void complete_now(io_context& ctx) noexcept {
         {
             std::lock_guard lk(mu_);
@@ -141,7 +115,7 @@ public:
         drain_ready(ctx);
     }
 
-    // Called from the op thunk on the io thread.
+  // Called from the op thunk on the io thread.
     std::uint64_t take_record() noexcept { return next_record_++; }
 
 private:
@@ -159,8 +133,6 @@ private:
                 }
             }
         }
-        // Dispatch OUTSIDE the lock: the thunk re-enters the device
-        // (take_record) and may complete the whole pipeline.
         for (iox::op_base* op : ready) {
             ctx.dispatch(reinterpret_cast<std::uint64_t>(op), record_bytes, 0);
         }
@@ -182,12 +154,6 @@ private:
     std::uint64_t next_record_ = 0; // io thread only
 };
 
-// ---------------------------------------------------------------------------
-// The operation: op_base thunk protocol, payload in the op state. The
-// context dispatches (op address, res = record_bytes); the thunk copies the
-// record into the caller's buffer and completes set_value(count) — the same
-// completion signature io::read has everywhere (the unified front end).
-// ---------------------------------------------------------------------------
 template <class R>
 struct read_op final : op_base {
     device* dev;
@@ -231,14 +197,9 @@ struct read_sender {
     }
 };
 
-// ---- vocabulary customization: io::read on the device handle --------------
-
 inline read_sender tag_invoke(io::read_t, io_context&, handle& h, wbytes dest) noexcept {
     return read_sender{h.dev, dest};
 }
-
-// ---- capability customization: io::supports (fd defaults are zero_copy=
-// true, mmap= false; the device overrides mmap — an mmio BAR, say) ---------
 
 inline bool tag_invoke(io::detail::supports_t, io::mmap_t, const handle&) noexcept {
     return true;
@@ -247,15 +208,13 @@ inline bool tag_invoke(io::detail::supports_t, io::zero_copy_t, const handle&) n
     return true;
 }
 
-// ---- driver registration (compile-time; the core never changes) -----------
-
 static_assert(!iox::driver::registered_driver<iox::io_context>);
 
-} // namespace softdev
+}
 
 namespace iox::driver {
 template <>
 inline constexpr bool registered_driver<softdev::device> = true;
-} // namespace iox::driver
+}
 
 static_assert(iox::driver::registered_driver<softdev::device>);

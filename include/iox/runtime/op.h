@@ -1,8 +1,5 @@
 // iox — unified async IO for Linux
-// runtime/op.h — op_base: the operation ABI every vocabulary op, driver op,
-// and bridge op (cancel receipts, source watches, deadlines) rides on.
-// One function pointer per op, no vtable (design §三.①⑧); the completion
-// path stamps its address into SQE user_data.
+// include/iox/runtime/op.h — op_base: the operation ABI every vocabulary op, driver op,
 #pragma once
 
 #include <cstdint>
@@ -19,4 +16,4 @@ struct op_base {
     explicit op_base(thunk_t t) noexcept : thunk(t) {}
 };
 
-} // namespace iox
+}

@@ -1,9 +1,5 @@
-// file_copy — M2 acceptance example: chunked async file copy through the
-// unified vocabulary, using registered buffers (zero-copy _FIXED paths) and
-// positional IO. The loop is driven one chunk at a time via sync_wait;
-// pipeline depth arrives with the loop combinators in M3+.
-//
-//     ./build/file_copy SRC DST
+// iox — unified async IO for Linux
+// examples/file_copy.cc — unified vocabulary, using registered buffers (zero-copy _FIXED paths) and
 #include <unistd.h>
 
 #include <array>

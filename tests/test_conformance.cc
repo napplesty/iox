@@ -1,8 +1,5 @@
-// Conformance suite seed (design §七.③): ONE set of assertions, run against
-// every readable/writable handle pair. This file is the executable proof of
-// the "unified frontend" claim — pipe ends, raw fds and files all satisfy
-// the same vocabulary contract. TCP/Unix sockets join in M3; NVMe/RDMA/XDP
-// handles join in M6+.
+// iox — unified async IO for Linux
+// tests/test_conformance.cc — every readable/writable handle pair. This file is the executable proof of
 #include <doctest/doctest.h>
 
 #include <array>
@@ -29,11 +26,6 @@ using namespace std::chrono_literals;
 
 namespace {
 
-/// The shared contract: whatever the handle types are, write then read must
-/// round-trip the exact bytes through the same vocabulary calls.
-/// (Handles with independent per-end positions, like pipe ends or separate
-/// opens, use the stream form; a single seekable file shares one position,
-/// so its conformance case is the positional form below.)
 template <class W, class R>
 void rw_roundtrip(io_context& ctx, W&& w, R&& r) {
     const std::string_view msg = "unified vocabulary";
@@ -49,7 +41,6 @@ void rw_roundtrip(io_context& ctx, W&& w, R&& r) {
     CHECK(std::string_view{reinterpret_cast<const char*>(buf.data()), std::get<0>(*rd)} == msg);
 }
 
-/// Positional variant for single-handle seekable objects.
 void rw_roundtrip_positional(io_context& ctx, fs::file& f) {
     const std::string_view msg = "unified vocabulary";
     std::array<std::byte, 64> buf{};
@@ -64,12 +55,7 @@ void rw_roundtrip_positional(io_context& ctx, fs::file& f) {
     CHECK(std::string_view{reinterpret_cast<const char*>(buf.data()), std::get<0>(*rd)} == msg);
 }
 
-/// Cancellation conformance: an in-flight read on any readable handle must
-/// complete set_stopped (not error) when its stop token fires.
-/// (Covered extensively in test_cancel.cc for timers; per-handle cancel
-/// checks join here as handles gain M4 cancellation of blocking reads.)
-
-} // namespace
+}
 
 TEST_CASE("conformance: typed pipe ends") {
     io_context ctx;
@@ -95,7 +81,7 @@ TEST_CASE("conformance: fs::file read and write") {
 
     auto f = fs::file::open(path.c_str(), fs::mode::rw | fs::mode::create | fs::mode::truncate);
     REQUIRE(f);
-    rw_roundtrip_positional(ctx, *f); // one handle, one shared position
+    rw_roundtrip_positional(ctx, *f);
 }
 
 TEST_CASE("conformance: unix socketpair ends") {
@@ -107,7 +93,6 @@ TEST_CASE("conformance: unix socketpair ends") {
 
 TEST_CASE("conformance: tcp socket pair over loopback") {
     io_context ctx;
-    // ephemeral listener
     auto acc = net::tcp::acceptor::listen(*net::endpoint::ipv4_any(0));
     REQUIRE(acc);
     sockaddr_storage ss{};
@@ -142,8 +127,6 @@ TEST_CASE("conformance: registered buffers over pipe ends") {
     ::memset(wbuf->data, 0, wbuf->size);
     ::memcpy(wbuf->data, msg.data(), msg.size());
 
-    // A registered buffer transfers as a whole slot — that is the fixed-op
-    // contract; the first bytes must carry the message.
     auto wr = ex::sync_wait(ctx, io::write(ctx, p->w, *wbuf));
     REQUIRE(wr);
     CHECK(std::get<0>(*wr) == wbuf->size);
@@ -154,17 +137,10 @@ TEST_CASE("conformance: registered buffers over pipe ends") {
     CHECK(std::string_view{reinterpret_cast<const char*>(rbuf->data), msg.size()} == msg);
 }
 
-// ---------------------------------------------------------------------------
-// Full-quantification additions (M6 pre-work): EOF, dead peer, cancellation
-// — the same three behavioral contracts asserted across every backend.
-// ---------------------------------------------------------------------------
-
 namespace {
 
 const std::byte conf_payload[4]{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
 
-/// EOF conformance: after the writer side is cut, a read completes 0 — EOF
-/// is a VALUE on every backend, never an error, never a hang.
 template <class R>
 void eof_conformance(io_context& ctx, R& r, auto&& cut_writer) {
     std::array<std::byte, 8> buf{};
@@ -174,10 +150,6 @@ void eof_conformance(io_context& ctx, R& r, auto&& cut_writer) {
     CHECK(std::get<0>(*rd) == 0);
 }
 
-/// Dead-reader conformance: writes after the reader is gone surface a TYPED
-/// error (EPIPE, or ECONNRESET for sockets) — never SIGPIPE, never a hang.
-/// A stream socket may absorb the first write into its buffers; if so, the
-/// follow-up after the FIN/RST must fail.
 template <class W>
 void dead_reader_conformance(io_context& ctx, W& w, auto&& cut_reader) {
     cut_reader();
@@ -193,12 +165,6 @@ void dead_reader_conformance(io_context& ctx, W& w, auto&& cut_reader) {
     REQUIRE(wr2.error);
 }
 
-/// Cancellation conformance: a read blocked on silence completes
-/// set_stopped — the RESULT carries no value and no error, and it happens
-/// promptly. Asserted at the child level on purpose: composed when_all
-/// semantics under an external stop request are stdexec's domain (a
-/// stop-requested when_all with stop-capable children completes set_stopped
-/// even when every child converted its cancellation into a value).
 template <class R>
 void cancel_conformance(io_context& ctx, R& r) {
     ex::inplace_stop_source src;
@@ -208,12 +174,11 @@ void cancel_conformance(io_context& ctx, R& r) {
     auto res = ex::sync_wait(ctx, src, io::read(ctx, r, wbytes{buf.data(), buf.size()}));
     const auto elapsed = std::chrono::steady_clock::now() - t0;
     REQUIRE_FALSE(res);
-    REQUIRE_FALSE(res.error.has_value()); // stopped is NOT an error
+    REQUIRE_FALSE(res.error.has_value());
     CHECK(res.stopped);
     CHECK(elapsed < 1s);
 }
 
-/// The loopback pair reused by the tcp conformance cases.
 struct conf_tcp_pair {
     std::optional<net::tcp::acceptor> acc;
     std::optional<net::tcp::socket> a;
@@ -239,7 +204,7 @@ struct conf_tcp_pair {
     }
 };
 
-} // namespace
+}
 
 TEST_CASE("conformance: EOF on pipe, unix pair and tcp is value 0") {
     io_context ctx;
@@ -303,5 +268,5 @@ TEST_CASE("conformance: file EOF is read_at past end completing 0") {
     auto rd = ex::sync_wait(ctx,
                             io::read_at(ctx, f, wbytes{buf.data(), buf.size()}, uoffset_t{4}));
     REQUIRE(rd);
-    CHECK(std::get<0>(*rd) == 0); // past the last byte: EOF value, not error
+    CHECK(std::get<0>(*rd) == 0);
 }

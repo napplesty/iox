@@ -1,16 +1,5 @@
-// echo — M3 benchmark: TCP echo round-trip throughput and latency.
-//
-// Topology is identical for both implementations: one server thread and one
-// client thread, K connections, M in-flight 64-byte request/response slots
-// per connection. The client records per-round-trip latency.
-//
-//   iox : accept loop + spawned echo sessions (io::loop), ping loops on the
-//         client — the vocabulary end to end, no hand-rolled state machines.
-//   raw : the same thing written directly against liburing.
-//
-// Perf gate (design §八): iox ≥ 85% of raw.
-//
-//     ./build/bench_echo [seconds=2]
+// iox — unified async IO for Linux
+// bench/echo.cc — Topology is identical for both implementations: one server thread and one
 #include <arpa/inet.h>
 #include <liburing.h>
 #include <netinet/in.h>
@@ -86,8 +75,6 @@ int connect_one(std::uint16_t port) {
     return fd;
 }
 
-// ---- shared client-side latency bookkeeping --------------------------------
-
 struct samples {
     std::vector<double> ns;
     void add(clock_t_::duration d) {
@@ -106,15 +93,9 @@ struct samples {
     }
 };
 
-// ---- iox implementation -----------------------------------------------------
-
 result run_iox(int seconds) {
     std::atomic<bool> stop{false};
 
-    // Bind the iox acceptor up front on an ephemeral port (NOT the port of
-    // listen_on_ephemeral's fd — that listener stays open for run_raw, and a
-    // second bind on the same port would fail EADDRINUSE, leaving *acceptor an
-    // empty expected and every accept on a garbage fd).
     auto acceptor = net::tcp::acceptor::listen(*net::endpoint::ipv4_any(0));
     if (!acceptor) {
         std::fprintf(stderr, "iox bench: listen failed: %s\n",
@@ -136,9 +117,6 @@ result run_iox(int seconds) {
         auto serve_one = [&](net::tcp::socket s) {
             auto* sn = new session{std::move(s)};
             live_sessions.fetch_add(1);
-            // eof must live in the loop lambda's capture (op state), NOT in
-            // its body: the chain completes asynchronously after the body
-            // has returned — a body-local would dangle.
             ex::detach(io::loop(ctx, [sn, &ctx, eof = false]() mutable {
                             return io::read(ctx, sn->sock,
                                             wbytes{sn->buf.get(), kPayload})
@@ -162,11 +140,9 @@ result run_iox(int seconds) {
                  | ex::then([&](net::tcp::socket sk) {
                        accepts.fetch_add(1);
                        serve_one(std::move(sk));
-                       return false; // keep accepting until the context stops
+                       return false;
                    });
         }));
-        // drain in-flight sessions after stop (clients closing => EOF),
-        // bounded so a stuck peer cannot wedge the benchmark
         while ((!stop.load(std::memory_order_relaxed) || live_sessions.load() > 0)
                && clock_t_::now() < server_start + std::chrono::seconds(seconds)
                     + std::chrono::seconds(5)) {
@@ -174,7 +150,6 @@ result run_iox(int seconds) {
         }
     });
 
-    // client thread
     result r;
     std::thread client([&] {
         io_context ctx;
@@ -244,11 +219,9 @@ result run_iox(int seconds) {
     return r;
 }
 
-// ---- raw liburing implementation --------------------------------------------
-
 struct raw_conn {
     int fd = -1;
-    bool awaiting_send = false; // true: a send is in flight (next: recv)
+    bool awaiting_send = false;
     std::byte buf[kPayload];
 };
 
@@ -282,7 +255,7 @@ result run_raw(int seconds) {
     std::thread server([&] {
         uring::ring ring{uring::ring_params{.entries = 256}};
         struct accept_slot {
-            iox::op_base base; // reuse dispatch shape
+            iox::op_base base;
             static void thunk(iox::op_base*, io_context&, std::int32_t, std::uint32_t) noexcept {}
             accept_slot() noexcept : base(&thunk) {}
         };
@@ -320,13 +293,11 @@ result run_raw(int seconds) {
                         ring.flush();
                         sqe = ring.next_sqe();
                     }
-                    if (c->awaiting_send) { // send done → await the next request
+                    if (c->awaiting_send) {
                         ::io_uring_prep_recv(sqe, c->fd, c->buf, kPayload, 0);
                         ::io_uring_sqe_set_data(sqe, c);
                         c->awaiting_send = false;
-                    } else { // recv done → echo back (64B may still be
-                        // partial in theory; with kPayload-sized echoes on
-                        // loopback it is not — same assumption both sides)
+                    } else {
                         ::io_uring_prep_send(sqe, c->fd, c->buf,
                                              static_cast<std::size_t>(cqe->res),
                                              MSG_NOSIGNAL);
@@ -336,9 +307,6 @@ result run_raw(int seconds) {
                 }
             });
         }
-        // stop: close every conn so pending client recvs complete (EOF/RST)
-        // and the client loop can wind down — otherwise its flush_and_wait
-        // blocks forever on sockets nobody serves anymore.
         for (auto& c : connections) {
             ::close(c.fd);
         }
@@ -374,7 +342,7 @@ result run_raw(int seconds) {
                 if (p == nullptr || p->fd < 0) {
                     return;
                 }
-                if (p->want_read) { // send completed → recv
+                if (p->want_read) {
                     io_uring_sqe* sqe = ring.next_sqe();
                     if (sqe == nullptr) {
                         ring.flush();
@@ -383,7 +351,7 @@ result run_raw(int seconds) {
                     ::io_uring_prep_recv(sqe, p->fd, p->buf, kPayload, 0);
                     ::io_uring_sqe_set_data(sqe, p);
                     p->want_read = false;
-                } else { // recv completed → record + send again
+                } else {
                     if (cqe->res == static_cast<std::int32_t>(kPayload)) {
                         s.add(clock_t_::now() - p->t0);
                     }
@@ -419,7 +387,7 @@ result run_raw(int seconds) {
     return r;
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
     const int seconds = argc > 1 ? std::atoi(argv[1]) : 2;

@@ -1,5 +1,5 @@
-// Tests for io_context: completion dispatch/injection, the event loop,
-// batching (enter counts), run_for, and sync_wait integration.
+// iox — unified async IO for Linux
+// tests/test_io_context.cc — batching (enter counts), run_for, and sync_wait integration.
 #include <doctest/doctest.h>
 
 #include <chrono>
@@ -30,7 +30,7 @@ struct counting_receiver {
 using schedule_op_t = decltype(stdexec::connect(io::schedule(std::declval<io_context&>()),
                                                 counting_receiver{}));
 
-} // namespace
+}
 
 TEST_CASE("dispatch routes a completion to its op") {
     io_context ctx;
@@ -55,7 +55,6 @@ TEST_CASE("dispatch routes a completion to its op") {
     CHECK(op.last_res == 42);
     CHECK(op.last_flags == 7);
 
-    // This is the fake-CQE injection path: no kernel interaction happened.
     CHECK(ctx.ring().enters() == 0);
 }
 
@@ -76,14 +75,12 @@ TEST_CASE("batch_scope merges flushes into one enter") {
         for (auto& slot : ops) {
             slot.emplace(ex::connect(io::schedule(ctx), counting_receiver{&count}));
         }
-        // Arm everything without leaving the scope.
         for (auto& slot : ops) {
             ex::start(*slot);
         }
-        // An explicit flush inside the scope must be deferred.
         ctx.flush();
         CHECK(ctx.ring().enters() == 0);
-    } // outermost scope exit flushes once
+    }
 
     CHECK(ctx.ring().enters() == 1);
 
@@ -96,7 +93,7 @@ TEST_CASE("flush without a scope goes straight to the kernel") {
     int count = 0;
     auto op = ex::connect(io::schedule(ctx), counting_receiver{&count});
     ex::start(op);
-    CHECK(ctx.ring().enters() == 0); // start does not submit on its own
+    CHECK(ctx.ring().enters() == 0);
     ctx.flush();
     CHECK(ctx.ring().enters() == 1);
     ctx.run_for(20ms);
@@ -109,7 +106,7 @@ TEST_CASE("run_for honors its deadline") {
     ctx.run_for(30ms);
     const auto elapsed = std::chrono::steady_clock::now() - t0;
     CHECK(elapsed >= 25ms);
-    CHECK(elapsed < 5s); // sanity, generous margin
+    CHECK(elapsed < 5s);
 }
 
 TEST_CASE("run_for returns early when stopped by a completion") {
@@ -127,31 +124,25 @@ TEST_CASE("run_for returns early when stopped by a completion") {
 
 TEST_CASE("stale run_for deadline does not stop a later run") {
     io_context ctx;
-    ctx.run_for(10ms); // arms and fires deadline #1
+    ctx.run_for(10ms);
 
     int count = 0;
     auto op = ex::connect(io::schedule(ctx), counting_receiver{&count});
     ex::start(op);
-    // If the stale deadline were still effective, run_for would return
-    // immediately with count == 0 (the schedule op would not have completed).
     ctx.run_for(100ms);
     CHECK(count == 1);
 }
 
 TEST_CASE("run_for leaves the loop runnable for a later run()") {
     io_context ctx;
-    ctx.run_for(10ms); // deadline fires → stop() ends the invocation
+    ctx.run_for(10ms);
 
-    // The trap this guards: run() after run_for must pump, not no-op on the
-    // stale stopped flag — otherwise in-flight SQEs are stranded and their
-    // senders never complete.
     int count = 0;
     auto op = ex::connect(io::schedule(ctx), counting_receiver{&count});
     ex::start(op);
     ctx.run_for(5s);
     CHECK(count == 1);
 
-    // Plain run() (no deadline): the completion itself stops the loop.
     auto again = ex::connect(io::schedule(ctx) | ex::then([&] { ctx.stop(); }),
                              counting_receiver{&count});
     ex::start(again);
@@ -164,7 +155,6 @@ TEST_CASE("sync_wait drives pure-algorithm senders without blocking") {
     auto r = ex::sync_wait(ctx, ex::just(42) | ex::then([](int x) { return x + 1; }));
     REQUIRE(r);
     CHECK(std::get<0>(*r) == 43);
-    // No uring op was ever submitted, and sync_wait must not have blocked.
     CHECK(ctx.ring().enters() == 0);
 }
 

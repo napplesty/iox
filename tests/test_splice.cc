@@ -1,6 +1,5 @@
-// Integration tests for the zero-copy family: io::splice (offsets, pipe
-// moves), io::tee (in-pipe duplication), io::pump (bounce-pipe mover with
-// probe + lossless fallback semantics).
+// iox — unified async IO for Linux
+// tests/test_splice.cc — moves), io::tee (in-pipe duplication), io::pump (bounce-pipe mover with
 #include <doctest/doctest.h>
 
 #include <fcntl.h>
@@ -52,7 +51,7 @@ std::string slurp_pipe(io_context& ctx, pipe::read_end& r) {
     }
 }
 
-} // namespace
+}
 
 TEST_CASE("splice: moves bytes between pipes without userspace") {
     io_context ctx;
@@ -66,7 +65,7 @@ TEST_CASE("splice: moves bytes between pipes without userspace") {
                            io::splice(ctx, p1->r.read_handle(), p2->w.write_handle(), 3));
     REQUIRE(r);
     CHECK(std::get<0>(*r) == 3);
-    p2->w.reset(); // EOF for the slurp
+    p2->w.reset();
     CHECK(slurp_pipe(ctx, p2->r) == "abc");
 }
 
@@ -89,7 +88,7 @@ TEST_CASE("splice: pinned offset reads a file window") {
                                            4, uoffset_t{2}));
     REQUIRE(r);
     CHECK(std::get<0>(*r) == 4);
-    sink->w.reset(); // EOF for the slurp
+    sink->w.reset();
     CHECK(slurp_pipe(ctx, sink->r) == "2345");
 }
 
@@ -108,13 +107,12 @@ TEST_CASE("tee: duplicates pipe data without consuming it") {
     REQUIRE(t);
     CHECK(std::get<0>(*t) == 2);
 
-    // the source still holds the bytes: splice them out again
     auto s = ex::sync_wait(ctx, io::splice(ctx, source->r.read_handle(),
                                            copy2->w.write_handle(), 2));
     REQUIRE(s);
     CHECK(std::get<0>(*s) == 2);
 
-    copy1->w.reset(); // EOF for the slurps
+    copy1->w.reset();
     copy2->w.reset();
     CHECK(slurp_pipe(ctx, copy1->r) == "xy");
     CHECK(slurp_pipe(ctx, copy2->r) == "xy");
@@ -125,7 +123,7 @@ TEST_CASE("pump: file → file full copy (the copy_file_range shape)") {
     temp_path src_path;
     temp_path dst_path;
 
-    constexpr std::size_t kSize = 1 << 20; // 1 MiB
+    constexpr std::size_t kSize = 1 << 20;
     {
         auto source = fs::file::open(src_path.value.c_str(),
                                   fs::mode::rw | fs::mode::create | fs::mode::truncate);
@@ -212,7 +210,6 @@ TEST_CASE("pump: a source that cannot splice fails cleanly, nothing moved") {
     io_context ctx;
     auto sink = pipe::pair::create();
     REQUIRE(sink);
-    // eventfd rejects splice (verified: EINVAL) — the probe must fail fast.
     const int efd = ::eventfd(1, EFD_NONBLOCK | EFD_CLOEXEC);
     REQUIRE(efd >= 0);
 
@@ -223,20 +220,16 @@ TEST_CASE("pump: a source that cannot splice fails cleanly, nothing moved") {
     CHECK(r.error->code() == EINVAL);
     CHECK(moved == 0);
 
-    // ...and the caller can fall back to a userspace pump with no loss:
-    // the eventfd still holds its counter (nothing was consumed).
     std::byte raw[8]{};
     auto rd = ex::sync_wait(ctx, io::read(ctx, iox::fd{efd}, wbytes{raw, sizeof(raw)}));
     REQUIRE(rd);
     CHECK(std::get<0>(*rd) == 8);
-    CHECK(std::to_integer<int>(raw[0]) == 1); // the primed counter, byte 0 (LE)
+    CHECK(std::to_integer<int>(raw[0]) == 1);
     ::close(efd);
 }
 
 TEST_CASE("pump: cancellation stops the pump mid-stream") {
     io_context ctx;
-    // A pipe source that never EOFs: pump it into a sink pipe nobody drains
-    // — then stop the world mid-flight.
     auto source = pipe::pair::create();
     auto sink = pipe::pair::create();
     REQUIRE(source);

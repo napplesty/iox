@@ -1,5 +1,5 @@
-// Unit tests for the liburing wrapper: raw ring mechanics without
-// io_context. Real kernel round trips (nop), flush semantics, move behavior.
+// iox — unified async IO for Linux
+// tests/test_ring.cc — io_context. Real kernel round trips (nop), flush semantics, move behavior.
 #include <doctest/doctest.h>
 
 #include <iox/runtime/io_context.h>
@@ -21,7 +21,7 @@ struct nop_op final : op_base {
     nop_op() noexcept : op_base(&nop_op::thunk) {}
 };
 
-} // namespace
+}
 
 TEST_CASE("ring initializes") {
     uring::ring r{uring::ring_params{.entries = 64}};
@@ -51,7 +51,7 @@ TEST_CASE("nop round trip through the kernel") {
     });
     CHECK(seen == 1);
     CHECK(op.fired == 1);
-    CHECK(op.last_res == 0); // nop completes with 0
+    CHECK(op.last_res == 0);
     CHECK(r.cq_ready() == 0);
 }
 
@@ -73,8 +73,6 @@ TEST_CASE("ring move transfers ownership") {
     CHECK(!a.ok());
     CHECK(b.ok());
 
-    // The moved-from ring must not tear down the kernel state on destruction
-    // (verified by b still working):
     nop_op op;
     io_uring_sqe* sqe = b.next_sqe();
     REQUIRE(sqe != nullptr);

@@ -1,5 +1,5 @@
-// DNS bridge tests: blocking_pool round trips (value + exception channels)
-// and net::resolve over loopback names.
+// iox — unified async IO for Linux
+// tests/test_dns.cc — and net::resolve over loopback names.
 #include <doctest/doctest.h>
 
 #include <stdexcept>

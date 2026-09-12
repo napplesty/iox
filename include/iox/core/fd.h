@@ -1,10 +1,5 @@
 // iox — unified async IO for Linux
-// fd.h — strong type for a raw kernel file descriptor (design §四.⑤:
-// no bare ints in the vocabulary).
-//
-// Non-owning: it refers to an fd without managing its lifetime. Owning
-// handles (fs::file, net sockets, pipe ends, …) arrive in M2+ and expose
-// fds through this type. Raw fds enter iox via io::poll/read/write etc.
+// include/iox/core/fd.h — strong type for a raw kernel file descriptor (design §四.⑤:
 #pragma once
 
 namespace iox {
@@ -22,4 +17,4 @@ struct fd {
     friend bool operator!=(fd a, fd b) noexcept { return !(a == b); }
 };
 
-} // namespace iox
+}

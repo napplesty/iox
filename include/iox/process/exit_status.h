@@ -1,6 +1,5 @@
 // iox — unified async IO for Linux
-// process/exit_status.h — how a child ended. A small parsed view over the
-// waitid siginfo: raw kernel encoding stays out of call sites.
+// include/iox/process/exit_status.h — how a child ended. A small parsed view over the
 #pragma once
 
 #include <signal.h>
@@ -9,7 +8,6 @@
 namespace iox::process {
 
 struct exit_status {
-    /// Exit code (valid when exited) or terminating signal (when signaled).
     int code = -1;
     bool exited = false;
     bool signaled = false;
@@ -24,8 +22,7 @@ struct exit_status {
         return s;
     }
 
-    /// The usual question: did it run to completion successfully?
     bool success() const noexcept { return exited && code == 0; }
 };
 
-} // namespace iox::process
+}

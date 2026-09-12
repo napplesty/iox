@@ -33,7 +33,6 @@ def test_file_roundtrip():
     got = f.read_at(len(payload), 0)
     expect(got == payload, "read_at must return what write_at wrote")
 
-    # positional stream API, crossing the write_at region
     f2 = iox.open_file(ctx, path, iox.Mode.read)
     head = f2.read(16)
     expect(head == payload[:16], "read() should stream from offset 0")
@@ -72,9 +71,6 @@ def test_sleep():
 
 
 def test_tcp_echo():
-    # One Context, one thread: iox contexts are single-threaded by design
-    # (one ring per thread). The peer is a plain python socket; the listen
-    # backlog lets its connect() complete before iox accepts.
     ctx = iox.Context()
     probe = socket.socket()
     probe.bind(("127.0.0.1", 0))

@@ -1,8 +1,5 @@
 // iox — unified async IO for Linux
-// nvme/io.h — the unified vocabulary on the NVMe device: read_at / write_at
-// / fsync as IORING_OP_URING_CMD passthru. The nvme_uring_cmd rides in the
-// op state; the data buffer is caller-owned (zero-copy contract — kernel
-// DMAs into it direct).
+// include/iox/nvme/io.h — the unified vocabulary on the NVMe device: read_at / write_at
 #pragma once
 
 #include <linux/nvme_ioctl.h>
@@ -18,8 +15,6 @@
 
 namespace iox::nvme {
 
-// NVMe IO opcodes (spec §6); spelled locally to keep the header independent
-// of linux/nvme.h (not shipped in linux-libc-dev).
 inline constexpr std::uint8_t op_flush = 0x00;
 inline constexpr std::uint8_t op_write = 0x01;
 inline constexpr std::uint8_t op_read = 0x02;
@@ -27,8 +22,6 @@ inline constexpr std::uint8_t op_read = 0x02;
 namespace detail {
 
 struct cmd_complete {
-    // CQE res for uring_cmd: 0 = success (byte count is what we requested);
-    // negative = -errno; positive = an NVMe status word (admin path).
     template <class R, class A>
     static void complete(R& r, std::int32_t res, const A& a) noexcept {
         if (res == 0) {
@@ -44,16 +37,13 @@ struct cmd_complete {
 struct io_policy {
     struct args_t {
         ::nvme_uring_cmd cmd{};
-        std::size_t len = 0; // bytes transferred (for set_value)
+        std::size_t len = 0;
         unsigned lba_size = 0;
         std::uint64_t offset = 0;
-        bool ring_ok = false; // ctx has 128-byte SQEs (captured at tag_invoke)
+        bool ring_ok = false;
     };
     using signatures = stdexec::completion_signatures<stdexec::set_value_t(std::size_t),
                                                 stdexec::set_error_t(iox::error), stdexec::set_stopped_t()>;
-    // The unified vocabulary speaks BYTE offsets; the device speaks LBAs.
-    // Misaligned requests are a typed error up front — a positional op must
-    // never silently round (same stance as write_at's sentinel guard).
     template <class R>
     static bool immediate(R& r, args_t& a) noexcept {
         if (a.len == 0) {
@@ -128,12 +118,7 @@ inline ::nvme_uring_cmd make_io_cmd(const device& dev, std::uint8_t opcode, void
     return cmd;
 }
 
-} // namespace detail
-
-// Concrete overloads next to the handle (ADL) — they beat the fd defaults,
-// which are not even viable: the device exposes no read_handle()/
-// write_handle() (it is NOT an fd handle; no stream position, no mmap path,
-// and no other vocabulary entry has any business compiling against it).
+}
 
 inline auto tag_invoke(io::read_at_t, io_context& ctx, device& dev, wbytes dest,
                        uoffset_t at) noexcept {
@@ -154,10 +139,10 @@ inline auto tag_invoke(io::write_at_t, io_context& ctx, device& dev, rbytes sour
 
 inline auto tag_invoke(io::fsync_t, io_context& ctx, device& dev) noexcept {
     ::nvme_uring_cmd cmd{};
-    cmd.opcode = op_flush; // NVMe FLUSH — force volatile cache to media
+    cmd.opcode = op_flush;
     cmd.nsid = dev.nsid();
     cmd.timeout_ms = 30'000;
     return io::detail::fd_sender<detail::flush_policy>{&ctx, *dev.fd_slot(), {cmd, ctx.ring().sqe128()}};
 }
 
-} // namespace iox::nvme
+}

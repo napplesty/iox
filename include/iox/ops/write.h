@@ -1,6 +1,5 @@
-// io::write — stream-position write. Plain rbytes takes WRITE (files/pipes)
-// or SEND|MSG_NOSIGNAL (message-based handles, see below); a
-// registered_buffer takes IORING_OP_WRITE_FIXED (zero-copy).
+// iox — unified async IO for Linux
+// include/iox/ops/write.h — or SEND|MSG_NOSIGNAL (message-based handles, see below); a
 #pragma once
 
 #include <sys/socket.h>
@@ -14,12 +13,6 @@ namespace iox::io {
 
 namespace detail {
 
-// io::write on message-based handles (sockets) uses SEND|MSG_NOSIGNAL: a
-// plain WRITE to a socket raises SIGPIPE when the peer has closed — a
-// classic way to lose a whole server to one dead client. The choice is a
-// bool in the args (not a template parameter) so every writable handle maps
-// to the SAME sender type — generic code (pumps, proxies, conformance
-// suites) can dispatch over handle variants uniformly.
 struct write_policy {
     struct args_t {
         rbytes src{};
@@ -27,10 +20,6 @@ struct write_policy {
     };
     using signatures = stdexec::completion_signatures<stdexec::set_value_t(std::size_t),
                                                 stdexec::set_error_t(iox::error), stdexec::set_stopped_t()>;
-    // A zero-length write has nothing to transfer: complete immediately with
-    // 0 and never touch the kernel. (Otherwise SEND(0) on a peer-closed
-    // socket returns EPIPE — an error for an operation that does nothing.)
-    // The EOF idiom read→write(n) terminates loops cleanly because of this.
     template <class R>
     static bool immediate(R& r, args_t& a) noexcept {
         if (a.src.size() == 0) {
@@ -53,8 +42,6 @@ struct write_fixed_policy {
     struct args_t {
         registered_buffer buffer{};
     };
-    // zero-length guard parity with the rbytes overload (design F4): a
-    // nothing-write is a value 0, never a kernel EPIPE round trip
     template <class R>
     static bool immediate(R& r, args_t& a) noexcept {
         if (a.buffer.size == 0) {
@@ -72,9 +59,6 @@ struct write_fixed_policy {
     using complete = transfer_complete;
 };
 
-
-// void_t detection (GCC 15 hard-errors on qualified dependent member lookup
-// inside requires-expression bodies — same quirk noted in test_capabilities).
 template <class T, class = void>
 struct has_message_based : std::false_type {};
 template <class T>
@@ -92,12 +76,9 @@ constexpr bool message_based_value() noexcept {
 template <class H>
 inline constexpr bool is_message_based = message_based_value<H>();
 
-} // namespace detail
+}
 
 inline constexpr struct write_t {
-    /// Stream-position write. Customization point: drivers provide
-    /// `tag_invoke(write_t, ctx, handle, rbytes)`; the fd default below
-    /// serves fd-backed handles.
     template <class H>
     requires tag_invocable<write_t, io_context&, H, rbytes>
     auto operator()(io_context& ctx, H&& h, rbytes src) const
@@ -106,8 +87,6 @@ inline constexpr struct write_t {
         return tag_invoke(*this, ctx, std::forward<H>(h), src);
     }
 
-    /// Registered-buffer write: selects IORING_OP_WRITE_FIXED (zero-copy).
-    /// Customization point: `tag_invoke(write_t, ctx, handle, registered_buffer&)`.
     template <class H>
     requires tag_invocable<write_t, io_context&, H, registered_buffer&>
     auto operator()(io_context& ctx, H&& h, registered_buffer& buffer) const
@@ -116,8 +95,6 @@ inline constexpr struct write_t {
         return tag_invoke(*this, ctx, std::forward<H>(h), buffer);
     }
 } write{};
-
-// ---- fd driver defaults ----------------------------------------------------
 
 template <class H>
 requires std::same_as<std::remove_cvref_t<H>, iox::fd> || writable<std::remove_cvref_t<H>>
@@ -132,4 +109,4 @@ auto tag_invoke(write_t, io_context& ctx, H&& h, registered_buffer& buffer) noex
     return detail::fd_sender<detail::write_fixed_policy>{&ctx, detail::writer_fd(h), {buffer}};
 }
 
-} // namespace iox::io
+}

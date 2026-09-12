@@ -1,5 +1,5 @@
-// Integration tests for fs::watcher (inotify) + fs::event_range: directory
-// events through the ordinary io::read vocabulary.
+// iox — unified async IO for Linux
+// tests/test_inotify.cc — events through the ordinary io::read vocabulary.
 #include <doctest/doctest.h>
 
 #include <sys/inotify.h>
@@ -35,8 +35,6 @@ struct temp_dir {
     temp_dir& operator=(const temp_dir&) = delete;
 };
 
-/// One read of everything currently queued. Names are COPIED out: fs::event
-/// holds string_views into the read buffer, which dies with this frame.
 struct recorded {
     std::uint32_t mask = 0;
     std::string name;
@@ -54,7 +52,7 @@ std::vector<recorded> read_events(io_context& ctx, fs::watcher& w) {
     return out;
 }
 
-} // namespace
+}
 
 TEST_CASE("fs::watcher: create, modify and delete carry the name") {
     io_context ctx;
@@ -64,7 +62,7 @@ TEST_CASE("fs::watcher: create, modify and delete carry the name") {
     auto wd = w->add(dir.value, IN_CREATE | IN_MODIFY | IN_DELETE);
     REQUIRE(wd);
 
-    { // create + modify: one buffered write queues both
+    {
         FILE* f = std::fopen((dir.value + "/test.txt").c_str(), "w");
         REQUIRE(f != nullptr);
         std::fputs("hello", f);
@@ -92,13 +90,13 @@ TEST_CASE("fs::watcher: create, modify and delete carry the name") {
 
 TEST_CASE("fs::watcher: IN_IGNORED arrives when the watched dir is removed") {
     io_context ctx;
-    temp_dir dir; // removes itself at scope exit, after our read below
+    temp_dir dir;
     auto w = fs::watcher::create();
     REQUIRE(w);
     REQUIRE(w->add(dir.value, IN_CREATE));
 
     ::rmdir(dir.value.c_str());
-    dir.value.clear(); // don't double-rmdir
+    dir.value.clear();
 
     auto events = read_events(ctx, *w);
     REQUIRE_FALSE(events.empty());

@@ -1,9 +1,5 @@
-// file_rw — M2 benchmark: sequential file write + read throughput.
-// iox vocabulary (registered buffers, positional IO, batched submission)
-// versus a raw liburing implementation of the SAME pattern (equal queue
-// depth on both sides). Perf gate: iox ≥ 85% of raw.
-//
-//     ./build/bench_file_rw [total_mib=128] [chunk_kib=64]
+// iox — unified async IO for Linux
+// bench/file_rw.cc — iox vocabulary (registered buffers, positional IO, batched submission)
 #include <fcntl.h>
 #include <liburing.h>
 #include <unistd.h>
@@ -27,7 +23,7 @@ using namespace std::chrono_literals;
 namespace {
 
 using clock_t_ = std::chrono::steady_clock;
-constexpr std::size_t kDepth = 64; // queue depth, identical for both paths
+constexpr std::size_t kDepth = 64;
 
 struct temp_file {
     std::string path;
@@ -51,7 +47,7 @@ double mib_per_s(std::uint64_t bytes, clock_t_::duration d) {
 }
 
 template <bool IsWrite>
-struct file_window; // rolling window, defined below
+struct file_window;
 
 template <bool IsWrite>
 struct refill_receiver {
@@ -70,9 +66,6 @@ struct refill_receiver {
     void set_stopped() && noexcept { w->on_complete(slot); }
 };
 
-// Rolling window: up to kDepth ops in flight; each completion refills its
-// slot from within the completion itself — the pipeline never drains. This
-// mirrors the raw baseline's structure exactly (fair comparison).
 template <bool IsWrite>
 struct file_window {
     using op_t = std::conditional_t<
@@ -127,8 +120,6 @@ struct file_window {
     }
 };
 
-// ---- iox path: rolling pipeline over the vocabulary ----------------------
-
 template <bool IsWrite>
 double run_iox(io_context& ctx, int raw_fd, buffer_pool& pool, std::size_t chunk,
                std::size_t n_chunks) {
@@ -142,8 +133,8 @@ double run_iox(io_context& ctx, int raw_fd, buffer_pool& pool, std::size_t chunk
         for (std::size_t i = 0; i < kDepth && i < n_chunks; ++i) {
             w.arm(w.next++, i);
         }
-    } // single flush to start the pipeline
-    ctx.run_for(60s); // upper bound; the last completion stops the loop
+    }
+    ctx.run_for(60s);
     const auto t1 = clock_t_::now();
 
     if (w.count != n_chunks) {
@@ -151,8 +142,6 @@ double run_iox(io_context& ctx, int raw_fd, buffer_pool& pool, std::size_t chunk
     }
     return mib_per_s(static_cast<std::uint64_t>(chunk) * n_chunks, t1 - t0);
 }
-
-// ---- raw liburing path: identical pattern, hand-rolled ------------------
 
 template <bool IsWrite>
 double run_raw(uring::ring& ring, int raw_fd, std::byte* buf, std::size_t chunk,
@@ -162,8 +151,6 @@ double run_raw(uring::ring& ring, int raw_fd, std::byte* buf, std::size_t chunk,
         raw_op() noexcept : op_base(&raw_op::thunk) {}
     };
     std::vector<raw_op> ops(kDepth);
-    // Rotate through kDepth buffers — the same working set as the iox path's
-    // pool, so cache-hotness is identical on both sides.
     std::vector<std::byte*> bufs(kDepth);
     for (auto& b : bufs) {
         b = buf + (&b - bufs.data()) * chunk;
@@ -199,7 +186,7 @@ double run_raw(uring::ring& ring, int raw_fd, std::byte* buf, std::size_t chunk,
     return mib_per_s(static_cast<std::uint64_t>(chunk) * n_chunks, t1 - t0);
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
     const std::uint64_t mib = argc > 1 ? std::strtoull(argv[1], nullptr, 10) : 128;
@@ -236,9 +223,6 @@ int main(int argc, char** argv) {
     std::printf("sequential file IO, %llu MiB, %zu KiB chunks, queue depth %zu\n",
                 static_cast<unsigned long long>(mib), chunk_kib, kDepth);
 
-    // Untimed warmup: allocate the file's pages so neither timed write pass
-    // pays first-touch allocation (tmpfs would otherwise penalize whoever
-    // runs first — measurement order must not leak into the result).
     (void)run_raw<true>(raw_ring, f.raw, raw_buf, chunk, n_chunks);
     (void)run_raw<false>(raw_ring, f.raw, raw_buf, chunk, n_chunks);
 

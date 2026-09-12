@@ -1,5 +1,5 @@
-// Integration tests for the signal module: signal::set (blocking discipline),
-// signal::watcher (signalfd), io::signal (siginfo completion, cancellation).
+// iox — unified async IO for Linux
+// tests/test_signal.cc — signal::watcher (signalfd), io::signal (siginfo completion, cancellation).
 #include <doctest/doctest.h>
 
 #include <signal.h>
@@ -18,7 +18,7 @@ namespace ex = iox::exec;
 
 TEST_CASE("signal: raise → siginfo completion, signal is consumed") {
     io_context ctx;
-    signal::set set{SIGUSR1, SIGUSR2}; // blocks both on this thread
+    signal::set set{SIGUSR1, SIGUSR2};
     auto w = signal::watcher::create(set);
     REQUIRE(w);
 
@@ -32,8 +32,6 @@ TEST_CASE("signal: raise → siginfo completion, signal is consumed") {
     REQUIRE(r2);
     CHECK(std::get<0>(*r2).ssi_signo == SIGUSR2);
 
-    // Both signals were consumed by reads: unblocking (set destruction)
-    // cannot deliver anything. Watcher is destroyed first by scope order.
 }
 
 TEST_CASE("signal: io::read also works (raw bytes of a siginfo record)") {
@@ -73,14 +71,13 @@ TEST_CASE("signal: stop token cancels a pending wait") {
                                counting_receiver{src.get_token(), &stopped});
     stdexec::start(op);
 
-    // 30ms later, request cancellation from a completion on the io thread.
+  // 30ms later, request cancellation from a completion on the io thread.
     auto canceller = io::sleep_for(ctx, 30ms) | ex::then([&] { src.request_stop(); });
     REQUIRE(ex::sync_wait(ctx, src, canceller));
-    ctx.run_for(100ms); // reap the -ECANCELED CQE
+    ctx.run_for(100ms);
 
     CHECK(stopped == 1);
-    ::raise(SIGUSR1); // nothing waits anymore; consumed below to keep the
-                      // unblock-on-destruction path clean
+    ::raise(SIGUSR1);
     auto drain = ex::sync_wait(ctx, io::signal(ctx, *w));
     REQUIRE(drain);
 }

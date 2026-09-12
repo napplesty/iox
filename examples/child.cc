@@ -1,11 +1,5 @@
-// child — the M4 process showcase: spawn a child with wired pipes, talk to
-// it through the ordinary vocabulary (write_all in, read out), and reap it
-// asynchronously through the pidfd — no waitpid blocking, no SIGCHLD
-// handling, no pid races.
-//
-//     $ ./build/child
-//     child said: HELLO FROM IOX
-//     child exited cleanly (code 0)
+// iox — unified async IO for Linux
+// examples/child.cc — it through the ordinary vocabulary (write_all in, read out), and reap it
 #include <cstdio>
 
 #include <iox/compose/write_all.h>
@@ -21,8 +15,8 @@ namespace ex = iox::exec;
 int main() {
     io_context ctx;
 
-    auto to_child = pipe::pair::create(); // parent writes → child stdin
-    auto from_child = pipe::pair::create(); // child stdout → parent reads
+    auto to_child = pipe::pair::create();
+    auto from_child = pipe::pair::create();
     if (!to_child || !from_child) {
         std::perror("pipe2");
         return 1;
@@ -42,9 +36,8 @@ int main() {
         std::fprintf(stderr, "write: %s\n", wr.error ? wr.error->message().c_str() : "?");
         return 1;
     }
-    to_child->w.reset(); // EOF: tr flushes and exits
+    to_child->w.reset();
 
-    // Read the answer until EOF — one loop, the usual read vocabulary.
     std::byte buf[256];
     std::string got;
     bool eof = false;

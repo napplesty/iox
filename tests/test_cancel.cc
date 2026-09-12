@@ -1,5 +1,5 @@
-// Cancellation tests: stop_token → IORING_OP_ASYNC_CANCEL → set_stopped.
-// All single-threaded: request_stop happens in a completion on the io thread.
+// iox — unified async IO for Linux
+// tests/test_cancel.cc — All single-threaded: request_stop happens in a completion on the io thread.
 #include <doctest/doctest.h>
 
 #include <chrono>
@@ -28,7 +28,7 @@ struct stop_counting_receiver {
     void set_stopped() && noexcept { ++*stopped; }
 };
 
-} // namespace
+}
 
 TEST_CASE("cancel: in-flight sleep is canceled via stop token") {
     io_context ctx;
@@ -42,25 +42,21 @@ TEST_CASE("cancel: in-flight sleep is canceled via stop token") {
     stdexec::start(op);
 
     const auto t0 = std::chrono::steady_clock::now();
-    // After 50ms, request cancellation from a completion on the io thread.
     auto canceller = io::sleep_for(ctx, 50ms) | ex::then([&] { src.request_stop(); });
     auto r = ex::sync_wait(ctx, src, canceller);
     REQUIRE(r);
-    // The manually-connected op lives outside sync_wait's completion
-    // accounting: pump the loop a little longer to reap the -ECANCELED CQE
-    // that the cancel receipt produced.
     ctx.run_for(100ms);
     const auto elapsed = std::chrono::steady_clock::now() - t0;
 
-    CHECK(stopped == 1);      // the 10s sleep completed set_stopped
-    CHECK(values == 0);       // not an error, not a value
-    CHECK(elapsed < 1s);      // and it did not wait 10 seconds
+    CHECK(stopped == 1);
+    CHECK(values == 0);
+    CHECK(elapsed < 1s);
 }
 
 TEST_CASE("cancel: already-stopped token completes synchronously") {
     io_context ctx;
     ex::inplace_stop_source src;
-    src.request_stop(); // stopped BEFORE the op is armed
+    src.request_stop();
 
     int stopped = 0;
     int values = 0;
@@ -71,7 +67,7 @@ TEST_CASE("cancel: already-stopped token completes synchronously") {
 
     CHECK(stopped == 1);
     CHECK(values == 0);
-    CHECK(ctx.ring().enters() == 0); // nothing ever reached the kernel
+    CHECK(ctx.ring().enters() == 0);
 }
 
 TEST_CASE("cancel: when_all tree with external stop source") {
@@ -87,10 +83,6 @@ TEST_CASE("cancel: when_all tree with external stop source") {
     auto r = ex::sync_wait(ctx, src, flow);
     const auto elapsed = std::chrono::steady_clock::now() - t0;
 
-    // A cancelled when_all completes set_stopped — the honest channel.
-    // (It used to fabricate a value success because the vocabulary senders
-    // never DECLARED set_stopped in their completion signatures; the
-    // red-team round fixed both the signatures and this expectation.)
     CHECK(r.stopped);
     CHECK_FALSE(r.error.has_value());
     CHECK(stopped == 1);

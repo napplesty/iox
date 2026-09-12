@@ -1,8 +1,5 @@
 // iox — unified async IO for Linux
-// nvme/admin.h — raw ADMIN passthru (IDENTIFY, GET_LOG_PAGE, firmware …):
-// nvme::admin(ctx, device, cmd). Requires CAP_SYS_ADMIN — control-path
-// escape hatch, not part of the conformance surface. Completes
-// set_value(result word) or a typed error.
+// include/iox/nvme/admin.h — raw ADMIN passthru (IDENTIFY, GET_LOG_PAGE, firmware …):
 #pragma once
 
 #include <linux/nvme_ioctl.h>
@@ -15,10 +12,8 @@
 #include "iox/ops/fd_sender.h"
 
 namespace iox::io::detail {
-// tag-only dispatch key (in io::detail so nvme headers can overload it
-// next to the device without a header cycle).
 struct admin_passthru_t final {};
-} // namespace iox::io::detail
+}
 
 namespace iox::nvme {
 
@@ -47,7 +42,7 @@ struct admin_policy {
             if (res < 0) {
                 stdexec::set_error(std::move(r), iox::error::from_negative(res));
             } else {
-                stdexec::set_value(std::move(r), res); // NVMe result dword
+                stdexec::set_value(std::move(r), res);
             }
         }
     };
@@ -60,7 +55,6 @@ inline auto tag_invoke(io::detail::admin_passthru_t, io_context& ctx, device& d,
         {cmd, ctx.ring().sqe128()}};
 }
 
-/// nvme::admin(ctx, device, cmd) — the CPO form of the admin escape hatch.
 inline constexpr struct admin_t {
     template <class D>
     requires std::same_as<D, device>
@@ -69,4 +63,4 @@ inline constexpr struct admin_t {
     }
 } admin{};
 
-} // namespace iox::nvme
+}

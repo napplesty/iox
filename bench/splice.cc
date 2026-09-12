@@ -1,9 +1,5 @@
-// bench_splice — zero-copy economics (M4): pump a large file through
-// tmpfs→tmpfs twice, once with the userspace read/write loop and once with
-// io::pump (splice through the bounce pipe). Wall time shows bandwidth; CPU
-// time shows the copy the kernel DIDN'T make us do.
-//
-//     $ ./build/bench_splice [MiB]
+// iox — unified async IO for Linux
+// bench/splice.cc — tmpfs→tmpfs twice, once with the userspace read/write loop and once with
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -41,7 +37,6 @@ bool prepare(const std::string& path, std::size_t bytes) {
     if (!f) {
         return false;
     }
-    // A pageless pattern: each byte stamps its position.
     const auto block = std::make_unique_for_overwrite<std::byte[]>(4096);
     for (std::size_t i = 0; i < 4096; ++i) {
         block[i] = static_cast<std::byte>(i & 0xff);
@@ -76,7 +71,7 @@ bool verify(const std::string& path, std::size_t bytes) {
     return true;
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
     const std::size_t mib = argc > 1 ? std::strtoull(argv[1], nullptr, 10) : 256;
@@ -93,7 +88,6 @@ int main(int argc, char** argv) {
     io_context ctx;
     const auto buffer = std::make_unique_for_overwrite<std::byte[]>(kChunk);
 
-    // ---- userspace: read + write_all --------------------------------------------------
     {
         auto source = fs::file::open(src_path.c_str(), fs::mode::read);
         auto dest = fs::file::open(dst_path.c_str(),
@@ -126,7 +120,6 @@ int main(int argc, char** argv) {
                     cpu > 0 ? moved / 1024.0 / 1024.0 / cpu : 0.0);
     }
 
-    // ---- kernel zero-copy: io::pump (splice) -------------------------------------------
     {
         auto source = fs::file::open(src_path.c_str(), fs::mode::read);
         auto dest = fs::file::open(dst_path.c_str(),

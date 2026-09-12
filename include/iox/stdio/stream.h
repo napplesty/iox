@@ -1,9 +1,5 @@
 // iox — unified async IO for Linux
-// stdio/stream.h — typed standard-stream handles.
-//
-// Non-owning views over fds 0/1/2 with direction in the type:
-// io::read(ctx, iox::std_in(), buf) compiles, io::write(ctx, iox::std_in(),
-// buf) does not.
+// include/iox/stdio/stream.h — typed standard-stream handles.
 #pragma once
 
 #include "iox/core/concepts.h"
@@ -40,4 +36,4 @@ static_assert(io::readable<in_channel> && !io::writable<in_channel>);
 static_assert(!io::readable<out_channel> && io::writable<out_channel>);
 static_assert(!io::readable<err_channel> && io::writable<err_channel>);
 
-} // namespace iox
+}

@@ -1,6 +1,5 @@
-// io::connect — initiate a stream connection (IORING_OP_CONNECT). For TCP
-// the socket must be in the unconnected state; completion is successful
-// connect or error (ECONNREFUSED, ETIMEDOUT, …).
+// iox — unified async IO for Linux
+// include/iox/ops/connect.h — the socket must be in the unconnected state; completion is successful
 #pragma once
 
 #include <sys/socket.h>
@@ -28,12 +27,9 @@ struct connect_policy {
     using complete = void_complete;
 };
 
-} // namespace detail
+}
 
 inline constexpr struct connect_t {
-    /// Customization point: drivers provide `tag_invoke(connect_t, ctx,
-    /// handle, const net::endpoint&)`; the fd default below serves
-    /// socket-backed handles.
     template <class H>
     requires tag_invocable<connect_t, io_context&, H, const net::endpoint&>
     auto operator()(io_context& ctx, H&& h, const net::endpoint& ep) const
@@ -42,8 +38,6 @@ inline constexpr struct connect_t {
         return tag_invoke(*this, ctx, std::forward<H>(h), ep);
     }
 } connect{};
-
-// ---- fd driver default -----------------------------------------------------
 
 template <class H>
 requires connectable<std::remove_cvref_t<H>>
@@ -54,4 +48,4 @@ auto tag_invoke(connect_t, io_context& ctx, H&& h, const net::endpoint& ep) noex
     return detail::fd_sender<detail::connect_policy>{&ctx, h.connect_handle(), a};
 }
 
-} // namespace iox::io
+}

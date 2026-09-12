@@ -1,12 +1,5 @@
 // iox — unified async IO for Linux
-// compose/detach.h — exec::detach: run a sender to completion, fire-and-
-// forget.
-//
-// The operation state is heap-owned and frees itself on any completion.
-// Keep all referenced state alive until the sender completes (session
-// objects own themselves). Session-per-connection servers are the intended
-// use: one allocation per connection on the control path — the data path
-// inside each loop iteration stays allocation-free.
+// include/iox/compose/detach.h — exec::detach: run a sender to completion, fire-and-
 #pragma once
 
 #include <type_traits>
@@ -47,15 +40,12 @@ struct detached_op {
         : op(stdexec::connect(std::move(s), done_receiver<Sndr>{this})) {}
 };
 
-} // namespace detach_detail
+}
 
-/// Start `sndr` detached on the calling thread's loop; the operation state
-/// is heap-owned and self-deletes on any completion. Keep all referenced
-/// state alive until the sender completes (session objects own themselves).
 template <class Sndr>
 void detach(Sndr&& sndr) {
     auto* d = new detach_detail::detached_op<std::decay_t<Sndr>>(std::forward<Sndr>(sndr));
     stdexec::start(d->op);
 }
 
-} // namespace iox::exec
+}

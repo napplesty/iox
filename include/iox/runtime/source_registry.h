@@ -1,10 +1,5 @@
 // iox — unified async IO for Linux
-// runtime/source_registry.h — the driver bridge: which external completion
-// sources (Driver SPI, design §六) are attached to a loop, and how they are
-// pumped. fd-mounted sources get a readiness poll; busy sources tick the
-// loop (~1 ms) while attached. Method bodies live in io_context.h (defined
-// after class io_context — they call its public acquire_sqe/submit_cancel;
-// a two-phase header-only definition keeps this header cycle-free).
+// include/iox/runtime/source_registry.h — the driver bridge: which external completion
 #pragma once
 
 #include <poll.h>
@@ -25,12 +20,8 @@ class source_registry {
 public:
     source_registry() noexcept;
 
-    /// Register `s` with the loop (no-op if already attached).
     void attach(io_context& ctx, completion_source& s) noexcept;
 
-    /// Unregister `s` (fd sources: cancel the readiness poll). Legal from
-    /// inside on_ready. Retirement completes on the NEXT pump — run_for()
-    /// once after detaching before destroying the source.
     void detach(io_context& ctx, completion_source& s) noexcept;
 
     bool attached(const completion_source& s) const noexcept;
@@ -38,10 +29,6 @@ public:
     void sweep_retired() noexcept;
 
 private:
-    // Readiness poll for one fd-mounted source. One op in flight at a time
-    // (arm -> CQE -> on_ready -> re-arm); retiring goes through
-    // submit_cancel and parks on the CQE — the registration keeps the
-    // storage alive until then (ADR-008 teardown lesson).
     struct source_watch final : op_base {
         completion_source* source = nullptr;
         bool retiring = false;
@@ -58,11 +45,9 @@ private:
         std::unique_ptr<source_watch> watch;
     };
 
-    // ~1 ms heartbeat while busy sources exist; wakes run() (a normal CQE)
-    // so the busy slots get polled without touching the loop's logic.
     struct busy_tick final : op_base {
         __kernel_timespec ts{};
-        source_registry* registry = nullptr; // back-pointer: the tick is a member
+        source_registry* registry = nullptr;
         bool active = false;
         bool in_flight = false;
 
@@ -80,4 +65,4 @@ private:
     busy_tick busy_tick_{};
 };
 
-} // namespace iox
+}

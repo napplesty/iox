@@ -1,5 +1,5 @@
-// io::schedule — resume on the io thread (IORING_OP_NOP): the "hop" every
-// loop / continuation uses to run the next step from the event loop itself.
+// iox — unified async IO for Linux
+// include/iox/ops/schedule.h — loop / continuation uses to run the next step from the event loop itself.
 #pragma once
 
 #include "iox/ops/fd_sender.h"
@@ -20,7 +20,7 @@ struct nop_policy {
 
 using schedule_sender = fd_sender<nop_policy>;
 
-} // namespace detail
+}
 
 inline constexpr struct schedule_t {
     detail::schedule_sender operator()(io_context& ctx) const noexcept {
@@ -28,4 +28,4 @@ inline constexpr struct schedule_t {
     }
 } schedule{};
 
-} // namespace iox::io
+}

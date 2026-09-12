@@ -1,17 +1,5 @@
 // iox — unified async IO for Linux
 // python/iox.cc — nanobind bindings: a synchronous, GIL-releasing Python API
-// over the unified vocabulary. Every operation goes through io_uring; the
-// GIL is dropped for the duration of the wait so worker threads keep
-// running. ADR-0012 records the design.
-//
-//     import iox
-//     ctx  = iox.Context()
-//     f    = iox.open_file(ctx, "/tmp/x", iox.Mode.rw | iox.Mode.create)
-//     f.write_at(b"hello", 0); f.fsync(); f.close()
-//     s    = iox.connect(ctx, "127.0.0.1", 9000)
-//     s.send(b"hi"); s.recv(4096)
-// Python.h must come first: it owns the feature-test macros
-// (_POSIX_C_SOURCE/_XOPEN_SOURCE) that libstdc++ headers also define.
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 
@@ -30,18 +18,13 @@ using namespace iox;
 
 namespace {
 
-// ---- error translation ------------------------------------------------------
-
 [[noreturn]] void raise(const error& e) {
     PyObject* args = Py_BuildValue("(is)", e.code(), e.message().c_str());
-    PyErr_SetObject(PyExc_OSError, args); // OSError(errno, message)
+    PyErr_SetObject(PyExc_OSError, args);
     Py_XDECREF(args);
     throw nb::python_error();
 }
 
-// Drive one sender to completion with the GIL released, translating the
-// sync_wait_result into values / OSError / RuntimeError. The release scope
-// ends before any Python C-API runs again.
 template <class Sndr>
 auto wait(io_context& ctx, Sndr&& s) {
     auto res = [&] {
@@ -57,14 +40,12 @@ auto wait(io_context& ctx, Sndr&& s) {
     return std::move(*res.value);
 }
 
-// ---- handles ----------------------------------------------------------------
-
 struct PyIOContext {
     io_context ctx;
 };
 
 struct PyFile {
-    PyIOContext* owner; // kept alive through nanobind keep_alive chains
+    PyIOContext* owner;
     fs::file f;
 
     explicit PyFile(PyIOContext& c, fs::file file) : owner(&c), f(std::move(file)) {}
@@ -84,10 +65,6 @@ struct PyListener {
     explicit PyListener(PyIOContext& c, net::tcp::acceptor a) : owner(&c), acceptor(std::move(a)) {}
 };
 
-// Read `size` bytes through `submit(dest) -> byte count` into a freshly
-// allocated Python bytes object, truncated to what arrived. The kernel
-// writes straight into the object's buffer — one copy total (a std::string
-// staging buffer would make it two).
 template <class Submit>
 nb::bytes read_into_bytes(std::size_t size, Submit submit) {
     PyObject* py = PyBytes_FromStringAndSize(nullptr, size);
@@ -101,11 +78,8 @@ nb::bytes read_into_bytes(std::size_t size, Submit submit) {
     return nb::steal<nb::bytes>(py);
 }
 
-// ---- file ops ----------------------------------------------------------------
-
-// mode arrives as unsigned: Python's ``Mode.rw | Mode.create`` yields int.
 PyFile open_file(PyIOContext& c, const std::string& path, unsigned m) {
-    auto f = [&] { // open(2) can block on network filesystems
+    auto f = [&] {
         nb::gil_scoped_release unheld;
         return fs::file::open(path.c_str(), static_cast<fs::mode>(m));
     }();
@@ -116,7 +90,7 @@ PyFile open_file(PyIOContext& c, const std::string& path, unsigned m) {
 }
 
 std::size_t file_write_at(PyFile& self, nb::bytes data, std::uint64_t offset) {
-    std::string buf(data.c_str(), data.size()); // detach from Python memory
+    std::string buf(data.c_str(), data.size());
     return std::get<0>(wait(self.owner->ctx,
                             io::write_at(self.owner->ctx, self.f,
                                          rbytes{as_rbytes(std::span<const char>{buf})},
@@ -158,8 +132,6 @@ void file_close(PyFile& self) {
     }
 }
 
-// ---- tcp ops ------------------------------------------------------------------
-
 PySocket tcp_connect(PyIOContext& c, const std::string& host, std::uint16_t port) {
     auto endpoint = net::endpoint::parse(host + ":" + std::to_string(port));
     if (!endpoint) {
@@ -198,7 +170,7 @@ std::size_t sock_send(PySocket& self, nb::bytes data) {
     wait(self.owner->ctx,
          io::write_all(self.owner->ctx, self.s,
                        rbytes{as_rbytes(std::span<const char>{buf})}));
-    return buf.size(); // write_all: everything or OSError
+    return buf.size();
 }
 
 nb::bytes sock_recv(PySocket& self, std::size_t size) {
@@ -206,7 +178,7 @@ nb::bytes sock_recv(PySocket& self, std::size_t size) {
         return std::get<0>(wait(self.owner->ctx,
                                 io::read(self.owner->ctx, self.s,
                                          wbytes{as_wbytes(dest)})));
-    }); // n == 0 is EOF: b""
+    });
 }
 
 void sock_close(PySocket& self) {
@@ -216,8 +188,6 @@ void sock_close(PySocket& self) {
     }
 }
 
-// ---- misc ----------------------------------------------------------------------
-
 void sleep_for(PyIOContext& c, double seconds) {
     if (seconds < 0) {
         throw nb::value_error("sleep duration must be non-negative");
@@ -226,7 +196,7 @@ void sleep_for(PyIOContext& c, double seconds) {
                                          static_cast<std::int64_t>(seconds * 1e9)}));
 }
 
-} // namespace
+}
 
 NB_MODULE(iox, m) {
     m.doc() = "iox — unified async IO (io_uring) with a synchronous, GIL-releasing "

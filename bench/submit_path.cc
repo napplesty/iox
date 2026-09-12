@@ -1,9 +1,5 @@
-// submit_path — M1 micro benchmark: cost of the full iox submission path
-// (CPO → sender → connect → start → SQE) versus the raw liburing floor
-// (next_sqe → prep → submit). Design §三's budget: submit path < 100 ns/op,
-// ≥85% of raw. Kernel completions are included (nop ops) for both paths.
-//
-//     ./build/bench_submit_path [n_ops]
+// iox — unified async IO for Linux
+// bench/submit_path.cc — (CPO → sender → connect → start → SQE) versus the raw liburing floor
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -24,13 +20,13 @@ struct counting_receiver {
     using receiver_concept = stdexec::receiver_tag;
     std::uint64_t* n = nullptr;
     iox::io_context* ctx = nullptr;
-    std::uint64_t stop_target = 0; // when nonzero, stop the loop at this count
+    std::uint64_t stop_target = 0;
 
     stdexec::env<> get_env() const noexcept { return {}; }
     template <class... As>
     void set_value(As&&...) && noexcept {
         if (++*n == stop_target) {
-            ctx->stop(); // all completions are in: end the measured run
+            ctx->stop();
         }
     }
     void set_error(iox::error) && noexcept { ++*n; }
@@ -94,8 +90,7 @@ double bench_iox(std::uint64_t n) {
                 counting_receiver{&count, &ctx, n}));
             stdexec::start(*slot);
         }
-    } // one flush for the whole batch
-    // run_for is only an upper bound; the last completion stops the loop.
+    }
     ctx.run_for(2s);
     const auto t1 = clock_t_::now();
 
@@ -108,7 +103,7 @@ double bench_iox(std::uint64_t n) {
     return std::chrono::duration<double, std::nano>(t1 - t0).count() / static_cast<double>(n);
 }
 
-} // namespace
+}
 
 int main(int argc, char** argv) {
     const std::uint64_t n = argc > 1 ? std::strtoull(argv[1], nullptr, 10) : 65536;

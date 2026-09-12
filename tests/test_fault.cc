@@ -1,13 +1,5 @@
-// tests/test_fault.cc — fault injection + real kernel faults (design §七.4).
-//
-// Two flavors:
-//   * injected: arm_failpoint(nth, -errno) makes the nth SQE reservation
-//     fail; the op must complete inline with exactly that typed error, its
-//     stop callbacks must stay disciplined, and the context must keep
-//     working afterwards.
-//   * real: mid-operation disconnects, dead peers, fd-table pressure —
-//     kernel-sourced errors the vocabulary must surface as typed errors
-//     (never signals, never hangs).
+// iox — unified async IO for Linux
+// tests/test_fault.cc — Two flavors:
 #include <doctest/doctest.h>
 
 #include <sys/socket.h>
@@ -33,7 +25,6 @@ namespace {
 
 const std::byte payload[4]{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
 
-/// A connected loopback TCP pair, both ends typed.
 struct tcp_pair {
     net::tcp::acceptor acc;
     net::tcp::socket client;
@@ -59,7 +50,7 @@ struct tcp_pair {
     }
 };
 
-} // namespace
+}
 
 TEST_CASE("fault: the Nth submission fails with the injected errno") {
     io_context ctx;
@@ -67,7 +58,7 @@ TEST_CASE("fault: the Nth submission fails with the injected errno") {
     REQUIRE(p);
 
     auto ok1 = ex::sync_wait(ctx, io::write(ctx, p->w, rbytes{payload, sizeof(payload)}));
-    REQUIRE(ok1); // ordinal 1: before arming
+    REQUIRE(ok1);
 
     ctx.arm_failpoint(/*nth=*/1, -ENOMEM);
     auto hit = ex::sync_wait(ctx, io::write(ctx, p->w, rbytes{payload, sizeof(payload)}));
@@ -77,12 +68,12 @@ TEST_CASE("fault: the Nth submission fails with the injected errno") {
 
     ctx.clear_failpoint();
     auto ok2 = ex::sync_wait(ctx, io::write(ctx, p->w, rbytes{payload, sizeof(payload)}));
-    REQUIRE(ok2); // context fully usable after the injected failure
+    REQUIRE(ok2);
 
     std::array<std::byte, 8> buf{};
     auto rd = ex::sync_wait(ctx, io::read(ctx, p->r, wbytes{buf.data(), buf.size()}));
     REQUIRE(rd);
-    CHECK(std::get<0>(*rd) == 8); // both surviving writes landed
+    CHECK(std::get<0>(*rd) == 8);
 }
 
 TEST_CASE("fault: injected EMFILE on io::open is a typed error") {
@@ -101,9 +92,8 @@ TEST_CASE("fault: injected EMFILE on io::open is a typed error") {
     auto made = ex::sync_wait(ctx, io::open(ctx, path.c_str(),
                                             fs::mode::rw | fs::mode::create | fs::mode::truncate));
     REQUIRE(made);
-    CHECK(std::get<0>(*made)); // adopted fs::file
+    CHECK(std::get<0>(*made));
 
-    // the async-opened file rides the normal vocabulary
     auto wr = ex::sync_wait(ctx, io::write(ctx, std::get<0>(*made), rbytes{payload, 4}));
     REQUIRE(wr);
     CHECK(std::get<0>(*wr) == 4);
@@ -120,7 +110,7 @@ TEST_CASE("fault: a detached op under an injected failure frees itself") {
     ex::detach(io::write(ctx, p->w, rbytes{payload, 4}) | ex::upon_error([&](iox::error) {
         ++reaped;
     }));
-    ctx.run_for(50ms); // the detached op completes inline; ASan gates the rest
+    ctx.run_for(50ms);
     CHECK(reaped == 1);
     ctx.clear_failpoint();
 }
@@ -138,22 +128,18 @@ TEST_CASE("fault: mid-operation disconnect — blocked read ends in EOF or reset
     io_context ctx;
     auto pair = tcp_pair::create(ctx);
 
-    // Read blocked on a silent peer; the peer then closes.
     std::array<std::byte, 16> buf{};
     auto rd = ex::sync_wait(ctx, ex::when_all(
                                      io::read(ctx, pair.client, wbytes{buf.data(), buf.size()})
                                          | ex::then([](std::size_t n) { return n == 0; }),
                                      io::sleep_for(ctx, 30ms) | ex::then([&] {
-                                         pair.server.reset(); // peer vanishes mid-read
+                                         pair.server.reset();
                                          return true;
                                      })));
     REQUIRE(rd);
-    const bool eof = std::get<0>(*rd); // when_all of two bool children: flat tuple
+    const bool eof = std::get<0>(*rd);
     CHECK(eof); // loopback close delivers EOF promptly (no RST raced here)
 
-    // And the survivor turns further writes into typed errors. The first
-    // write after the close may still land in buffers (FIN vs RST race);
-    // the follow-up must surface EPIPE.
     auto wr = ex::sync_wait(ctx, io::write(ctx, pair.client, rbytes{payload, 4}));
     if (wr) {
         ctx.run_for(50ms);
@@ -177,8 +163,8 @@ TEST_CASE("fault: cancel race — stop fires while a pipe read is blocked") {
     auto r = ex::sync_wait(ctx, src, io::read(ctx, p->r, wbytes{buf.data(), buf.size()}));
     const auto elapsed = std::chrono::steady_clock::now() - t0;
 
-    REQUIRE_FALSE(r);            // blocked read cancelled
+    REQUIRE_FALSE(r);
     REQUIRE_FALSE(r.error.has_value()); // set_stopped, never an error
     CHECK(r.stopped);
-    CHECK(elapsed < 1s);         // and promptly
+    CHECK(elapsed < 1s);
 }

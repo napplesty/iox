@@ -1,10 +1,5 @@
 // iox — unified async IO for Linux
-// net/unix.h — Unix domain stream sockets.
-//
-// Same vocabulary as TCP (io::accept / io::connect / io::read / io::write);
-// endpoints are filesystem paths or abstract names (endpoint::unix).
-// socketpair() yields a typed bidirectional pair for the conformance suite
-// and for local IPC.
+// include/iox/net/unix.h — Unix domain stream sockets.
 #pragma once
 
 #include <sys/socket.h>
@@ -31,7 +26,6 @@ public:
         if (ep.family() != endpoint::family::unix_path) {
             return std::unexpected(error::from_errno(EINVAL));
         }
-        // Path sockets linger in the filesystem: unlink a stale entry first.
         if (ep.data()->sa_family == AF_UNIX &&
             reinterpret_cast<const sockaddr_un*>(ep.data())->sun_path[0] != '\0') {
             ::unlink(reinterpret_cast<const sockaddr_un*>(ep.data())->sun_path);
@@ -64,7 +58,6 @@ public:
     bool valid() const noexcept { return fd_.valid(); }
 
     iox::fd accept_handle() const noexcept { return fd_; }
-    // sockets are message-based: io::write uses SEND|MSG_NOSIGNAL (no SIGPIPE)
     static constexpr bool message_based = true;
 
     iox::fd* fd_slot() noexcept { return &fd_; }
@@ -113,7 +106,6 @@ public:
     iox::fd read_handle() const noexcept { return fd_; }
     iox::fd write_handle() const noexcept { return fd_; }
     iox::fd connect_handle() const noexcept { return fd_; }
-    // sockets are message-based: io::write uses SEND|MSG_NOSIGNAL (no SIGPIPE)
     static constexpr bool message_based = true;
 
     iox::fd* fd_slot() noexcept { return &fd_; }
@@ -129,8 +121,6 @@ private:
     iox::fd fd_{};
 };
 
-/// Connected pair over Unix domain sockets — the typed replacement for
-/// socketpair(2) raw fds. Both ends readable and writable.
 struct pair {
     socket a;
     socket b;
@@ -146,4 +136,4 @@ struct pair {
 
 static_assert(io::readable<socket> && io::writable<socket> && !io::seekable<socket>);
 
-} // namespace iox::net::unix_dom
+}

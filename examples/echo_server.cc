@@ -1,11 +1,5 @@
-// echo_server — M3 acceptance example: concurrent TCP echo server.
-//
-// Each accepted connection gets a detached io::loop session that echoes
-// until EOF. Note what is NOT here: no threads, no callback state machines,
-// no manual CQE routing — and the session body is the same vocabulary that
-// echoes files, pipes or NVMe queues.
-//
-//     ./build/echo_server [port=7777]        # then: nc localhost 7777
+// iox — unified async IO for Linux
+// examples/echo_server.cc — Each accepted connection gets a detached io::loop session that echoes
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -33,8 +27,6 @@ int main(int argc, char** argv) {
     }
     std::printf("echoing on 127.0.0.1:%u (Ctrl-C to stop)\n", port);
 
-    // The session owns its socket and buffer; it lives until its loop
-    // reaches EOF or error, then deletes itself.
     struct session {
         iox::net::tcp::socket sock;
         std::unique_ptr<std::byte[]> buf = std::make_unique<std::byte[]>(4096);
@@ -44,9 +36,6 @@ int main(int argc, char** argv) {
 
     auto serve_one = [&](iox::net::tcp::socket s) {
         auto* sn = new session{std::move(s)};
-        // eof rides in the loop lambda's capture (op state): the chain
-        // completes asynchronously after the body returned — a body-local
-        // would dangle.
         auto body = iox::io::loop(ctx, [sn, &ctx, eof = false]() mutable {
             return iox::io::read(ctx, sn->sock, iox::wbytes{sn->buf.get(), 4096})
                  | iox::exec::let_value([sn, &ctx, &eof](std::size_t n) {
@@ -56,7 +45,6 @@ int main(int argc, char** argv) {
                    })
                  | iox::exec::then([&eof]() { return eof; });
         });
-        // both completion and error free the session
         iox::exec::detach(std::move(body) | iox::exec::upon_error([](auto&&) {})
                                  | iox::exec::then([sn] { delete sn; }));
     };
@@ -65,7 +53,7 @@ int main(int argc, char** argv) {
         return iox::io::accept(ctx, *acc) | iox::exec::then(serve_one);
     });
 
-    // The accept loop never yields true; run it detached and serve forever.
+  // The accept loop never yields true; run it detached and serve forever.
     iox::exec::detach(std::move(accept_loop));
     ctx.run();
     return 0;

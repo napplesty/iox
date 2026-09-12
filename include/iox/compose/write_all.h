@@ -1,15 +1,5 @@
 // iox — unified async IO for Linux
-// compose/write_all.h — io::write_all: the streaming-write combinator.
-//
-// Write the ENTIRE view to a stream handle. Single io::write calls may
-// transfer partially (SEND on a full socket buffer returns a short count);
-// write_all resubmits the remainder until every byte is out. The mutable
-// lambda state rides inside the loop op — no allocation, no heap shared
-// count. Completes set_value() when done.
-//
-// The lambda lives in a non-template inline function so that write_all on
-// every handle type yields the SAME sender type — std::variant channels
-// (ioxpump) can dispatch without type erasure.
+// include/iox/compose/write_all.h — io::write_all: the streaming-write combinator.
 #pragma once
 
 #include <concepts>
@@ -34,7 +24,7 @@ inline auto write_all_impl(io_context* ctx, iox::fd f, rbytes source, bool use_s
                });
     });
 }
-} // namespace detail
+}
 
 inline constexpr struct write_all_t {
     template <class H>
@@ -45,4 +35,4 @@ inline constexpr struct write_all_t {
     }
 } write_all{};
 
-} // namespace iox::io
+}

@@ -1,7 +1,5 @@
-// Regression tests for the red-team audit round (ADR-008): every case here
-// pins a bug four independent attackers found — completion-signature
-// honesty, mass cancel, stale deadlines, re-entrant dispatch, wedged pumps,
-// offset sentinels, teardown order, owning close, SIGPIPE disposition.
+// iox — unified async IO for Linux
+// tests/test_redteam.cc — completion-signature
 #include <doctest/doctest.h>
 
 #include <fcntl.h>
@@ -93,7 +91,7 @@ struct plain_counting_receiver {
     }
 };
 
-} // namespace
+}
 
 TEST_CASE("redteam P0: when_all + cancel completes stopped, never a fabricated success") {
     io_context ctx;
@@ -107,10 +105,10 @@ TEST_CASE("redteam P0: when_all + cancel completes stopped, never a fabricated s
     auto r = ex::sync_wait(ctx, src, flow);
     const auto elapsed = std::chrono::steady_clock::now() - t0;
 
-    CHECK(elapsed < 1s);         // did not wait the hour
-    CHECK_FALSE(r);              // no value channel
-    CHECK_FALSE(r.error.has_value()); // no error channel
-    CHECK(r.stopped);            // the honest channel (used to abort when_all)
+    CHECK(elapsed < 1s);
+    CHECK_FALSE(r);
+    CHECK_FALSE(r.error.has_value());
+    CHECK(r.stopped);
 }
 
 TEST_CASE("redteam P1: mass cancel far beyond the 64-receipt pool") {
@@ -144,11 +142,9 @@ TEST_CASE("redteam P1: an interrupted run_for does not kill a later run()") {
                                }),
                                plain_counting_receiver{&interrupted});
     ex::start(stopper);
-    ctx.run_for(500ms); // interrupted at ~0ms; its deadline SQE stays armed
+    ctx.run_for(500ms);
     CHECK(interrupted >= 1);
 
-    // A plain run() must run to its own completion — the stale deadline
-    // used to fire at 500ms and stop this loop from nowhere.
     int later = 0;
     auto timer = ex::connect(io::sleep_for(ctx, 750ms) | ex::then([&] {
                                  ++later;
@@ -165,9 +161,6 @@ TEST_CASE("redteam P1: nested sync_wait inside a completion does not re-enter di
     int nested = -1;
 
     ex::detach(io::sleep_for(ctx, 5ms) | ex::then([&] {
-                   // The natural "do a small nested wait inside a completion"
-                   // shape used to re-dispatch the in-flight CQE and blow
-                   // the stack.
                    auto r = ex::sync_wait(ctx, io::sleep_for(ctx, 1ms));
                    nested = r ? 1 : 0;
                }));
@@ -183,7 +176,7 @@ TEST_CASE("redteam P1: pump into a full sink stays cancellable") {
                                 fs::mode::rw | fs::mode::create | fs::mode::truncate);
         REQUIRE(f);
         std::array<std::byte, 16384> chunk{};
-        for (int i = 0; i < 64; ++i) { // 1 MiB total: far past the sink pipe
+        for (int i = 0; i < 64; ++i) {
             auto wr = ex::sync_wait(ctx,
                                     io::write_all(ctx, *f, rbytes{chunk.data(), chunk.size()}));
             REQUIRE(wr);
@@ -192,7 +185,7 @@ TEST_CASE("redteam P1: pump into a full sink stays cancellable") {
     auto src = fs::file::open(path.value.c_str(), fs::mode::read);
     auto sink = pipe::pair::create();
     REQUIRE(src);
-    REQUIRE(sink); // nobody drains the sink: it fills within ~64 KiB
+    REQUIRE(sink);
 
     ex::inplace_stop_source src_stop;
     int stopped = 0;
@@ -218,7 +211,7 @@ TEST_CASE("redteam P2: uoffset_t{UINT64_MAX} is a typed error, not a positional 
     }
     auto f = fs::file::open(path.value.c_str(), fs::mode::read);
     REQUIRE(f);
-    ::lseek(f->read_handle().v, 1, SEEK_SET); // position 1: the old bug read HERE
+    ::lseek(f->read_handle().v, 1, SEEK_SET);
 
     std::array<std::byte, 8> buf{};
     auto r = ex::sync_wait(ctx, io::read_at(ctx, *f, wbytes{buf.data(), buf.size()},
@@ -229,12 +222,10 @@ TEST_CASE("redteam P2: uoffset_t{UINT64_MAX} is a typed error, not a positional 
 
     auto w = ex::sync_wait(ctx, io::write_at(ctx, *f, rbytes{buf.data(), 0},
                                              uoffset_t{UINT64_MAX}));
-    (void)w; // zero-length path also goes through the guard; error is enough
+    (void)w;
 }
 
 TEST_CASE("redteam P2: event_range cannot walk past the buffer on a lying length") {
-    // One record whose header claims a 1000-byte name, inside an 8-byte
-    // buffer handed over as n = header size. The iterator must stop at end.
     std::byte buf[sizeof(::inotify_event)];
     auto* ev = reinterpret_cast<::inotify_event*>(buf);
     ev->wd = 1;
@@ -247,7 +238,7 @@ TEST_CASE("redteam P2: event_range cannot walk past the buffer on a lying length
     for (const auto& e : range) {
         ++visited;
     }
-    CHECK(visited == 1); // pre-fix: ran past the buffer and beyond
+    CHECK(visited == 1);
 }
 
 TEST_CASE("redteam P1: blocking_pool teardown leaves the context usable") {
@@ -260,7 +251,7 @@ TEST_CASE("redteam P1: blocking_pool teardown leaves the context usable") {
     } // pool dies here; the resident wakeup op must retire with it
 
     auto after = ex::sync_wait(ctx, io::schedule(ctx) | ex::then([] { return 7; }));
-    REQUIRE(after); // pre-fix: dispatched into freed pool memory (ASan UAF)
+    REQUIRE(after);
     CHECK(std::get<0>(*after) == 7);
 }
 
@@ -275,12 +266,10 @@ TEST_CASE("redteam P2: owning close (rvalue) tolerates handle death and fd reuse
         REQUIRE(r);
     } // f is gone; the owning close stole the number, nothing dangles
 
-    // Open a new file — it may reuse the closed fd number; the ring's CLOSE
-    // must never hit it.
     auto victim = fs::file::open(path.value.c_str(),
                                  fs::mode::rw | fs::mode::create | fs::mode::truncate);
     REQUIRE(victim);
-    ctx.run_for(50ms); // any late close would land here
+    ctx.run_for(50ms);
     CHECK(victim->valid());
     const std::string_view probe = "still open";
     auto wr = ex::sync_wait(ctx, io::write_all(ctx, *victim, as_rbytes(std::span{probe})));
@@ -292,10 +281,10 @@ TEST_CASE("redteam P0: an unrelated ctx.stop() does not strand sync_wait's op") 
     ex::detach(io::sleep_for(ctx, 30ms) | ex::then([&] { ctx.stop(); }));
 
     const auto t0 = std::chrono::steady_clock::now();
-    auto r = ex::sync_wait(ctx, io::sleep_for(ctx, 150ms)); // watchdog fires mid-wait
+    auto r = ex::sync_wait(ctx, io::sleep_for(ctx, 150ms));
     const auto elapsed = std::chrono::steady_clock::now() - t0;
 
-    REQUIRE(r); // the op completed with its value; the stop only ended one pass
+    REQUIRE(r);
     CHECK(elapsed >= 140ms);
 }
 
@@ -306,7 +295,7 @@ TEST_CASE("redteam P0: raw-fd write to a dead peer is EPIPE, not SIGPIPE") {
     ::close(sv[1]);
 
     auto first = ex::sync_wait(ctx, io::write(ctx, iox::fd{sv[0]}, rbytes{reinterpret_cast<const std::byte*>("x"), 1}));
-    (void)first;    // may succeed (buffered) until the RST lands
+    (void)first;
     ctx.run_for(20ms);
     auto second = ex::sync_wait(ctx, io::write(ctx, iox::fd{sv[0]}, rbytes{reinterpret_cast<const std::byte*>("y"), 1}));
     if (!second) { // when the kernel reports it, it must be EPIPE, not death
@@ -317,10 +306,6 @@ TEST_CASE("redteam P0: raw-fd write to a dead peer is EPIPE, not SIGPIPE") {
 }
 
 TEST_CASE("redteam followup: sync_wait inside a live batch_scope errors, never spins") {
-    // The sync_wait loop pumps until the sender completes; inside a live
-    // batch_scope run() refuses to submit, so it could NEVER complete and
-    // the old loop spun forever (stress a2e). It must now reject up front —
-    // before connecting, so nothing is left in the ring.
     io_context ctx;
     batch_scope scope{ctx};
     auto r = ex::sync_wait(ctx, io::sleep_for(ctx, 1ms));
@@ -330,22 +315,17 @@ TEST_CASE("redteam followup: sync_wait inside a live batch_scope errors, never s
 }
 
 TEST_CASE("redteam followup: run_for re-entered from a completion terminates") {
-    // A nested run_for()'s exit used to retire the OUTER frame's in-flight
-    // deadline; the outer loop then blocked past its own deadline forever
-    // (stress a9e). The nested frame must leave the bookkeeping to the
-    // outermost invocation.
     io_context ctx;
     int inner = 0;
     ex::detach(io::sleep_for(ctx, 5ms) | ex::then([&] {
         ++inner;
-        ctx.run_for(5ms); // re-enter the loop from inside a completion
+        ctx.run_for(5ms);
     }));
     const auto t0 = std::chrono::steady_clock::now();
     ctx.run_for(2s);
     const auto elapsed = std::chrono::steady_clock::now() - t0;
     CHECK(inner == 1);
     CHECK(elapsed < 1s); // ended early via the nested stop — never past 2s
-    // And the context is fully usable afterwards (ghost deadline retired).
     auto s = ex::sync_wait(ctx, io::sleep_for(ctx, 1ms));
     REQUIRE(s);
 }

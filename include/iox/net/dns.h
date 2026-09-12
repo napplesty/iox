@@ -1,8 +1,5 @@
 // iox — unified async IO for Linux
-// net/dns.h — name resolution over the blocking escape hatch.
-//
-// getaddrinfo has no async form; blocking_pool lifts it into the sender
-// world. The result is a vector of endpoints, resolved off the io thread.
+// include/iox/net/dns.h — name resolution over the blocking escape hatch.
 #pragma once
 
 #include <netdb.h>
@@ -16,9 +13,6 @@
 
 namespace iox::net {
 
-/// Resolve `host:service` to endpoint(s) on a worker thread; completes on
-/// the io thread. Numeric forms ("127.0.0.1", "8080") resolve without
-/// hitting DNS, like getaddrinfo(3).
 template <class Pool>
 auto resolve(Pool& pool, std::string host, std::string service) {
     return pool.run([host = std::move(host), service = std::move(service)]() {
@@ -43,4 +37,4 @@ auto resolve(Pool& pool, std::string host, std::string service) {
     });
 }
 
-} // namespace iox::net
+}

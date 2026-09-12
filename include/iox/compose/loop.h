@@ -1,16 +1,5 @@
 // iox — unified async IO for Linux
-// compose/loop.h — io::loop: a repeating sender factory.
-//
-// io::loop(ctx, f) runs `f()` — a nullary callable returning a sender whose
-// single value is convertible to bool — repeatedly on the io thread until an
-// iteration yields true. The re-arm hops through io::schedule(ctx): the next
-// iteration is connected from the event loop, after the previous operation
-// state has fully unwound. Destroying an operation state from inside its own
-// completion is a lifetime trap; the hop makes it structurally impossible.
-//
-// Cross-iteration state must live in `f`'s capture (it rides inside the loop
-// op): a variable declared in the body dangles once the body returns, and
-// the chain completes asynchronously afterwards (ADR-005).
+// include/iox/compose/loop.h — io::loop: a repeating sender factory.
 #pragma once
 
 #include <optional>
@@ -35,19 +24,10 @@ struct child_receiver {
     using receiver_concept = stdexec::receiver_tag;
     loop_op<F, R>* self;
 
-    // Forward the downstream environment: stop tokens (cancellation) and any
-    // other queries must reach the operations INSIDE the loop — an empty env
-    // here would make loop bodies uncancellable (SIGINT graceful exit, M4).
-    // Explicit (dependent) return type, not auto: this body is instantiated
-    // only at use, when loop_op is complete.
     decltype(stdexec::get_env(std::declval<const R&>())) get_env() const noexcept {
         return stdexec::get_env(self->r);
     }
 
-    // Defensive: the loop sender declares set_value_t() in its completion
-    // signatures (that is how IT completes upstream); stdexec's connect-time
-    // checks require this receiver shape to accept it too. Iteration
-    // completions always arrive via the bool overload below.
     void set_value() && noexcept { stdexec::set_value(std::move(self->r)); }
     template <class V>
     void set_value(V&& done) && noexcept;
@@ -82,13 +62,9 @@ struct loop_op {
     F f;
     R r;
 
-    // stdexec adaptor op states are immovable (their move constructors are
-    // left undefined — they are only ever constructed in place). Placement
-    // storage + a prvalue connect() constructs the child without any move;
-    // std::optional<child_op_t>::emplace would require the move ctor.
     alignas(child_op_t) std::byte child_raw[sizeof(child_op_t)];
     bool child_live = false;
-    std::optional<hop_op_t> hop; // iox's own op states are movable
+    std::optional<hop_op_t> hop;
 
     using operation_state_concept = stdexec::operation_state_tag;
 
@@ -132,8 +108,6 @@ void child_receiver<F, R>::set_value(V&& done) && noexcept {
         stdexec::set_value(std::move(self->r));
         return;
     }
-    // Not done: hop through the ring; the next arm() runs after this child
-    // (and the entire stdexec adaptor chain above it) has unwound.
     self->hop.emplace(stdexec::connect(io::schedule(*self->ctx),
                                        hop_receiver<F, R>{self}));
     stdexec::start(*self->hop);
@@ -154,7 +128,7 @@ void child_receiver<F, R>::set_stopped() && noexcept {
     stdexec::set_stopped(std::move(self->r));
 }
 
-} // namespace loop_detail
+}
 
 template <class F>
 struct loop_sender {
@@ -174,13 +148,10 @@ struct loop_sender {
 };
 
 inline constexpr struct loop_t {
-    /// Repeat `f()` on the io thread until an iteration yields true.
-    /// `f` must not throw; iteration senders complete with one bool-like
-    /// value, or error/stop (which ends the loop by propagation).
     template <class F>
     loop_sender<std::decay_t<F>> operator()(io_context& ctx, F&& f) const noexcept {
         return {&ctx, std::forward<F>(f)};
     }
 } loop{};
 
-} // namespace iox::io
+}

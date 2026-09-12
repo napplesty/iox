@@ -1,6 +1,5 @@
-// Integration tests for the M1 vocabulary: fd-generic read/write, poll,
-// timers. Real kernel objects: pipes and eventfds. Also covers error
-// channels and sender composition (when_all).
+// iox — unified async IO for Linux
+// tests/test_ops.cc — timers. Real kernel objects: pipes and eventfds. Also covers error
 #include <doctest/doctest.h>
 
 #include <sys/eventfd.h>
@@ -21,7 +20,6 @@ using namespace iox;
 
 namespace {
 
-/// RAII guard for raw fds created by tests.
 struct fd_guard {
     int v = -1;
     explicit fd_guard(int raw) : v(raw) {}
@@ -38,7 +36,7 @@ std::string_view trim_to(std::span<const std::byte> bytes, std::size_t n) {
     return std::string_view{reinterpret_cast<const char*>(bytes.data()), n};
 }
 
-} // namespace
+}
 
 TEST_CASE("pipe: write then read round trip") {
     io_context ctx;
@@ -66,13 +64,13 @@ TEST_CASE("pipe: read returns 0 at EOF") {
     REQUIRE(::pipe(fds) == 0);
     fd_guard r{fds[0]};
     {
-        fd_guard w{fds[1]}; // write end closes at scope exit, arming EOF
+        fd_guard w{fds[1]};
     }
 
     std::array<std::byte, 8> buf{};
     auto rd = ex::sync_wait(ctx, io::read(ctx, fd{r.v}, wbytes{buf.data(), buf.size()}));
     REQUIRE(rd);
-    CHECK(std::get<0>(*rd) == 0); // EOF
+    CHECK(std::get<0>(*rd) == 0);
 }
 
 TEST_CASE("pipe: read on an invalid fd reports an error") {
@@ -89,7 +87,7 @@ TEST_CASE("poll: eventfd readiness") {
     fd_guard efd{::eventfd(0, EFD_CLOEXEC)};
     REQUIRE(efd.v >= 0);
 
-    // Signal first, then poll: POLLIN must come back set.
+  // Signal first, then poll: POLLIN must come back set.
     const std::uint64_t one = 1;
     REQUIRE(::write(efd.v, &one, sizeof(one)) == sizeof(one));
 
@@ -135,15 +133,12 @@ TEST_CASE("when_all runs a write and a read concurrently") {
     const std::string_view msg = "concurrent";
     std::array<std::byte, 64> buf{};
 
-    // Both operations are armed before either is guaranteed to run: the
-    // read waits for the write's data through the ring, no user threading.
     auto both = ex::when_all(
         io::write(ctx, fd{w.v}, as_rbytes(std::span{msg})),
         io::read(ctx, fd{r.v}, wbytes{buf.data(), buf.size()}));
 
     auto res = ex::sync_wait(ctx, both);
     REQUIRE(res);
-    // when_all completes with the values of both children.
     CHECK(std::get<0>(*res) == msg.size());
     CHECK(std::get<1>(*res) == msg.size());
     CHECK(trim_to(buf, std::get<1>(*res)) == msg);

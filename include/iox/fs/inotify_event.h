@@ -1,7 +1,5 @@
 // iox — unified async IO for Linux
-// fs/inotify_event.h — walk the variable-length records an fs::watcher
-// read produced. inotify_event headers carry a `len`; the name (when
-// present, NUL-padded to len) trails each record.
+// include/iox/fs/inotify_event.h — walk the variable-length records an fs::watcher
 #pragma once
 
 #include <sys/inotify.h>
@@ -20,8 +18,6 @@ struct event {
     int wd = -1;
     std::uint32_t mask = 0;
     std::uint32_t cookie = 0;
-    /// File name for directory watches; empty when the event is about the
-    /// watched path itself.
     std::string_view name;
 
     bool has(std::uint32_t bit) const noexcept { return (mask & bit) != 0; }
@@ -30,7 +26,6 @@ struct event {
 class event_range {
 public:
     event_range() noexcept = default;
-    /// `n` is the count io::read returned for the watcher fd.
     event_range(wbytes buffer, std::size_t n) noexcept
         : current_(reinterpret_cast<const char*>(buffer.data())),
           end_(reinterpret_cast<const char*>(buffer.data()) + n) {}
@@ -45,9 +40,6 @@ public:
             const char* name = record->len > 0 ? p_ + sizeof(::inotify_event) : nullptr;
             std::string_view n;
             if (name != nullptr) {
-                // The length field is kernel-trusted data in practice, but a
-                // lying/truncated record must not read past the buffer —
-                // bound the name by the room that actually remains.
                 const std::size_t room =
                     end_ > name ? static_cast<std::size_t>(end_ - name) : 0;
                 n = std::string_view{name,
@@ -61,7 +53,6 @@ public:
             p_ += sizeof(::inotify_event) + record->len;
             if (p_ > end_) {
                 p_ = end_; // a truncated or lying record length must not walk
-                           // past the buffer (red-team F4: heap overflow)
             }
             return *this;
         }
@@ -90,4 +81,4 @@ private:
     const char* end_ = nullptr;
 };
 
-} // namespace iox::fs
+}

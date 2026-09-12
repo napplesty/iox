@@ -1,3 +1,4 @@
+// iox — unified async IO for Linux
 #include <iox/core/error.h>
 
 namespace iox::detail {
@@ -15,10 +16,10 @@ const char* errno_name(int e) noexcept {
     case EIO: return "EIO";
     case ENOENT: return "ENOENT";
     case ENOMEM: return "ENOMEM";
-    case ESRCH: return "ESRCH";       // kill on a reaped pid
-    case ECHILD: return "ECHILD";     // double wait
-    case EXDEV: return "EXDEV";       // cross-device link/copy
-    case ENOTTY: return "ENOTTY";     // ioctl on a non-tty
+    case ESRCH: return "ESRCH";
+    case ECHILD: return "ECHILD";
+    case EXDEV: return "EXDEV";
+    case ENOTTY: return "ENOTTY";
     case EADDRINUSE: return "EADDRINUSE";
     case EISCONN: return "EISCONN";
     case ENOTSOCK: return "ENOTSOCK";
@@ -30,7 +31,7 @@ const char* errno_name(int e) noexcept {
     case EACCES: return "EACCES";
     case EDEADLK: return "EDEADLK";
     case EAFNOSUPPORT: return "EAFNOSUPPORT";
-    case EOPNOTSUPP: return "EOPNOTSUPP"; // ENOTSUP is the same value on Linux
+    case EOPNOTSUPP: return "EOPNOTSUPP";
     case EOVERFLOW: return "EOVERFLOW";
     case EPERM: return "EPERM";
     case EPIPE: return "EPIPE";
@@ -46,4 +47,4 @@ const char* errno_name(int e) noexcept {
     }
 }
 
-} // namespace iox::detail
+}

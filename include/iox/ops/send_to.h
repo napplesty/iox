@@ -1,5 +1,5 @@
-// io::send_to — connectionless datagram send (IORING_OP_SENDMSG) with an
-// explicit destination endpoint.
+// iox — unified async IO for Linux
+// include/iox/ops/send_to.h — explicit destination endpoint.
 #pragma once
 
 #include <sys/socket.h>
@@ -37,12 +37,9 @@ struct send_to_policy {
     using complete = transfer_complete;
 };
 
-} // namespace detail
+}
 
 inline constexpr struct send_to_t {
-    /// Customization point: drivers provide `tag_invoke(send_to_t, ctx,
-    /// handle, rbytes, const net::endpoint&)`; the fd default below serves
-    /// socket-backed datagram handles.
     template <class H>
     requires tag_invocable<send_to_t, io_context&, H, rbytes, const net::endpoint&>
     auto operator()(io_context& ctx, H&& h, rbytes src, const net::endpoint& to) const
@@ -51,8 +48,6 @@ inline constexpr struct send_to_t {
         return tag_invoke(*this, ctx, std::forward<H>(h), src, to);
     }
 } send_to{};
-
-// ---- fd driver default -----------------------------------------------------
 
 template <class H>
 requires datagram<std::remove_cvref_t<H>>
@@ -65,4 +60,4 @@ auto tag_invoke(send_to_t, io_context& ctx, H&& h, rbytes src,
     return detail::fd_sender<detail::send_to_policy>{&ctx, h.datagram_handle(), a};
 }
 
-} // namespace iox::io
+}

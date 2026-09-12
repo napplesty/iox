@@ -1,9 +1,5 @@
 // iox — unified async IO for Linux
-// net/endpoint.h — socket addresses with typed construction and parsing.
-//
-// One value type covers IPv4 / IPv6 / Unix (path & abstract) endpoints.
-// `parse` accepts the forms used across iox tooling:
-//   "1.2.3.4:8080"  "[::1]:8080"  "/scratch/sock"  "unix:/scratch/sock"  "@/abstract"
+// include/iox/net/endpoint.h — socket addresses with typed construction and parsing.
 #pragma once
 
 #include <arpa/inet.h>
@@ -25,8 +21,6 @@ namespace iox::net {
 class endpoint {
 public:
     enum class family : std::uint8_t { ipv4, ipv6, unix_path };
-    // the family() getter shadows the enum name in qualified lookup —
-    // use endpoint::family_t when you need the type.
     using family_t = family;
 
     endpoint() noexcept = default;
@@ -35,7 +29,6 @@ public:
         sockaddr_in sin{};
         sin.sin_family = AF_INET;
         sin.sin_port = htons(port);
-        // inet_pton needs a NUL-terminated string; string_view is not.
         char scratch[INET_ADDRSTRLEN + 1];
         if (address.size() > INET_ADDRSTRLEN ||
             ::inet_pton(AF_INET, c_str(address, scratch, sizeof(scratch)), &sin.sin_addr) != 1) {
@@ -60,8 +53,6 @@ public:
         return endpoint{reinterpret_cast<const sockaddr*>(&sin6), sizeof(sin6)};
     }
 
-    /// Unix domain endpoint; `abstract` selects the abstract namespace
-    /// (no filesystem entry, dies with the socket).
     static std::expected<endpoint, error> unix(std::string_view path, bool abstract = false) noexcept {
         if (path.size() >= sizeof(sockaddr_un::sun_path)) {
             return std::unexpected(error::from_errno(EINVAL));
@@ -74,13 +65,12 @@ public:
         } else {
             ::memcpy(sun.sun_path, path.data(), path.size());
         }
-        // abstract sockets size includes the trailing bytes
         return endpoint{reinterpret_cast<const sockaddr*>(&sun),
                         static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + 1 + path.size())};
     }
 
     static std::expected<endpoint, error> parse(std::string_view text) noexcept {
-        if (text.starts_with('[')) { // [::1]:port
+        if (text.starts_with('[')) {
             const auto close = text.find(']');
             if (close == std::string_view::npos || close + 2 > text.size() ||
                 text[close + 1] != ':') {
@@ -179,8 +169,6 @@ private:
         ::memcpy(&ss_, address, length);
     }
 
-    /// Copy a string_view into a fixed NUL-terminated buffer (inet_pton and
-    /// friends require C strings; views are not).
     static const char* c_str(std::string_view source, char* dest, std::size_t capacity) noexcept {
         ::memcpy(dest, source.data(), source.size());
         dest[source.size()] = '\0';
@@ -218,4 +206,4 @@ private:
     socklen_t len_ = 0;
 };
 
-} // namespace iox::net
+}

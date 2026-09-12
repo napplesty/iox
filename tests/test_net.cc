@@ -1,6 +1,5 @@
-// Network integration tests on loopback: TCP accept/connect/echo, Unix
-// stream (path + abstract), UDP send_to/recv_from, endpoint parse/format,
-// typed connect errors, and io::loop composition.
+// iox — unified async IO for Linux
+// tests/test_net.cc — stream (path + abstract), UDP send_to/recv_from, endpoint parse/format,
 #include <doctest/doctest.h>
 
 #include <unistd.h>
@@ -26,7 +25,6 @@ using namespace std::chrono_literals;
 
 namespace {
 std::uint16_t free_port() {
-    // bind port 0 and read back the ephemeral port
     auto a = net::tcp::acceptor::listen(net::endpoint::ipv4_any(0).value());
     REQUIRE(a);
     sockaddr_storage ss{};
@@ -34,7 +32,7 @@ std::uint16_t free_port() {
     (void)!::getsockname(a->accept_handle().v, reinterpret_cast<sockaddr*>(&ss), &len);
     return ntohs(reinterpret_cast<sockaddr_in*>(&ss)->sin_port);
 }
-} // namespace
+}
 
 TEST_CASE("endpoint: parse and format round trips") {
     auto v4 = net::endpoint::parse("127.0.0.1:8080");
@@ -70,19 +68,17 @@ TEST_CASE("tcp: accept, connect, echo over loopback") {
     auto client = net::tcp::socket::unconnected(net::endpoint::family_t::ipv4);
     REQUIRE(client);
 
-    // accept and connect concurrently: when_all arms both before running.
     std::byte buffer[64];
     auto setup = ex::when_all(io::accept(ctx, *acc), io::connect(ctx, *client, *net::endpoint::ipv4("127.0.0.1", port)));
     auto done = ex::sync_wait(ctx, setup);
     REQUIRE(done);
-    auto server_side = std::get<0>(std::move(*done)); // net::tcp::socket
+    auto server_side = std::get<0>(std::move(*done));
     CHECK(server_side.valid());
 
     auto peer = client->peer();
     REQUIRE(peer);
     CHECK(peer->port() == port);
 
-    // echo round trip through the same vocabulary as pipes/files
     const std::string_view msg = "tcp echo";
     auto wr = ex::sync_wait(ctx, io::write(ctx, *client, as_rbytes(std::span{msg})));
     REQUIRE(wr);
@@ -95,7 +91,7 @@ TEST_CASE("tcp: accept, connect, echo over loopback") {
 
 TEST_CASE("tcp: connect to a dead port is a typed error") {
     io_context ctx;
-    const auto port = free_port(); // bound then released: nothing listens
+    const auto port = free_port();
 
     auto client = net::tcp::socket::unconnected(net::endpoint::family_t::ipv4);
     REQUIRE(client);
@@ -156,7 +152,7 @@ TEST_CASE("udp: send_to / recv_from with source endpoint") {
     const auto n = std::get<0>(*rd);
     const auto& from = std::get<1>(*rd);
     CHECK(std::string_view{reinterpret_cast<const char*>(buffer), n} == msg);
-    CHECK(from.port() == port_a); // the true source, delivered with the value
+    CHECK(from.port() == port_a);
 }
 
 TEST_CASE("io::loop: repeats until the body says stop") {
@@ -179,8 +175,6 @@ TEST_CASE("io::loop + exec::detach: full echo session lifecycle to EOF") {
     net::unix_dom::socket& a = pr->a;
     net::unix_dom::socket& b = pr->b;
 
-    // Spawned session: echo everything back until EOF (read 0 → write 0 →
-    // loop stops). Runs detached; self-deletes when the loop finishes.
     auto buffer = std::make_unique<std::byte[]>(64);
     bool session_finished = false;
     auto session = io::loop(ctx, [&]() {
@@ -193,7 +187,6 @@ TEST_CASE("io::loop + exec::detach: full echo session lifecycle to EOF") {
                   | ex::then([&]() { session_finished = true; });
     ex::detach(std::move(session));
 
-    // Client: one request, read the echo, then close → session sees EOF.
     const std::string_view msg = "session lifecycle";
     auto wr = ex::sync_wait(ctx, io::write(ctx, b, as_rbytes(std::span{msg})));
     REQUIRE(wr);
@@ -204,10 +197,10 @@ TEST_CASE("io::loop + exec::detach: full echo session lifecycle to EOF") {
     CHECK(std::string_view{reinterpret_cast<const char*>(echo_buf),
                            std::get<0>(*rd)} == msg);
 
-    b.reset();               // peer closed: the session's next read is EOF
-    ctx.run_for(100ms);      // pump the loop until the session finishes
+    b.reset();
+    ctx.run_for(100ms);
 
-    CHECK(session_finished); // detached loop reached EOF and completed
+    CHECK(session_finished);
 }
 
 TEST_CASE("io::write_all: drains a payload larger than the socket buffer") {
@@ -215,9 +208,6 @@ TEST_CASE("io::write_all: drains a payload larger than the socket buffer") {
     auto pr = net::unix_dom::pair::create();
     REQUIRE(pr);
 
-    // 1 MiB over a ~208 KiB default unix stream buffer: single io::write
-    // calls return short counts and write_all must resubmit the remainder
-    // (the ioxpump corruption scenario — partial SEND must not drop bytes).
     constexpr std::size_t kSize = 1u << 20;
     auto source = std::make_unique_for_overwrite<std::byte[]>(kSize);
     for (std::size_t i = 0; i < kSize; ++i) {
@@ -225,7 +215,6 @@ TEST_CASE("io::write_all: drains a payload larger than the socket buffer") {
     }
     auto dest = std::make_unique_for_overwrite<std::byte[]>(kSize);
 
-    // writer: full payload, then close so the reader sees EOF
     ex::detach(io::write_all(ctx, pr->b, rbytes{source.get(), kSize})
                    | ex::then([&] { pr->b.reset(); }));
 
@@ -234,7 +223,7 @@ TEST_CASE("io::write_all: drains a payload larger than the socket buffer") {
         return io::read(ctx, pr->a, wbytes{dest.get() + got, kSize - got})
              | ex::then([&](std::size_t n) {
                    got += n;
-                   return n == 0; // EOF after the writer closed
+                   return n == 0;
                });
     });
     REQUIRE(ex::sync_wait(ctx, reader));

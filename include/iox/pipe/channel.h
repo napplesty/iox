@@ -1,12 +1,5 @@
 // iox — unified async IO for Linux
-// pipe/channel.h — typed pipe ends (design §四.①).
-//
-// A pipe's two ends are two different types. The classic bug — reading from
-// the write end, or vice versa — is a compile error here, not an EBADF at
-// 2am. Each end exposes exactly one direction:
-//
-//   static_assert(io::readable<pipe::read_end> && !io::writable<pipe::read_end>);
-//   static_assert(!io::readable<pipe::write_end> && io::writable<pipe::write_end>);
+// include/iox/pipe/channel.h — typed pipe ends (design §四.①).
 #pragma once
 #include <fcntl.h>
 #include <unistd.h>
@@ -109,4 +102,4 @@ static_assert(io::readable<read_end> && !io::writable<read_end>);
 static_assert(!io::readable<write_end> && io::writable<write_end>);
 static_assert(!io::seekable<read_end> && !io::seekable<write_end>);
 
-} // namespace iox::pipe
+}

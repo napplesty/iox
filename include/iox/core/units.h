@@ -1,10 +1,5 @@
 // iox — unified async IO for Linux
-// units.h — strong newtypes for positions and sizes (design §四.⑤).
-//
-// Plain integers in IO signatures are a classic bug farm: read(fd, buf,
-// offset, len) style calls invite transposed arguments that compile fine and
-// corrupt data at runtime. These wrappers make the compiler catch them —
-// lightweight formal verification for the most common IO mistakes.
+// include/iox/core/units.h — strong newtypes for positions and sizes (design §四.⑤).
 #pragma once
 
 #include <cstddef>
@@ -12,7 +7,6 @@
 
 namespace iox {
 
-/// Absolute position within a seekable object (file offset).
 struct uoffset_t {
     std::uint64_t v = 0;
 
@@ -26,7 +20,6 @@ struct uoffset_t {
     friend bool operator<(uoffset_t a, uoffset_t b) noexcept { return a.v < b.v; }
 };
 
-/// Byte count for transfers.
 struct io_size_t {
     std::size_t v = 0;
 
@@ -36,4 +29,4 @@ struct io_size_t {
     friend bool operator==(io_size_t a, io_size_t b) noexcept { return a.v == b.v; }
 };
 
-} // namespace iox
+}

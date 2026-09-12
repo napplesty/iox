@@ -1,17 +1,5 @@
-// tests/test_driver.cc — M5 Driver SPI against a SOFTWARE device.
-//
-// softdev::device is a counter device: every io::read on its handle
-// completes with one 8-byte record (a monotonically increasing u64) through
-// the vocabulary CPO seam — the same io::read a pipe or file takes. The
-// device deliberately has no kernel fd semantics of its own: its
-// completions arrive through the three completion_source attachment modes
-// (fd-mounted eventfd doorbell / busy-slot tick / active injection), which
-// is exactly the shape NVMe/RDMA/XDP drivers will plug in as (M6+).
-//
-// Covers: all three modes end-to-end through io::read; simultaneous
-// sources; detach retirement incl. detach-from-inside-on_ready; the
-// default fd path still resolving through the same CPOs; io::supports
-// capability overrides; the registered_driver trait.
+// iox — unified async IO for Linux
+// tests/test_driver.cc — softdev::device is a counter device: every io::read on its handle
 #include <doctest/doctest.h>
 
 #include <sys/eventfd.h>
@@ -36,9 +24,6 @@
 using namespace std::chrono_literals;
 namespace ex = iox::exec;
 using namespace iox;
-
-
-// ---------------------------------------------------------------------------
 
 TEST_CASE("driver: fd-mounted completion source — eventfd doorbell wakes the loop") {
     softdev::device dev(softdev::device::mode::fd_mounted);
@@ -65,7 +50,7 @@ TEST_CASE("driver: fd-mounted completion source — eventfd doorbell wakes the l
 
     ctx.detach_source(dev);
     CHECK_FALSE(ctx.source_attached(dev));
-    ctx.run_for(20ms); // reap the cancelled readiness poll before teardown
+    ctx.run_for(20ms);
 }
 
 TEST_CASE("driver: busy-slot completion source — ~1ms tick polls has_work") {
@@ -85,7 +70,6 @@ TEST_CASE("driver: busy-slot completion source — ~1ms tick polls has_work") {
     std::uint64_t rec = 0;
     std::memcpy(&rec, buf, sizeof(rec));
     CHECK(rec == 0);
-    // readiness was scheduled 8ms out; the 1ms tick must not fire early
     CHECK(elapsed >= 7ms);
     CHECK(elapsed < 2s);
 
@@ -96,15 +80,12 @@ TEST_CASE("driver: busy-slot completion source — ~1ms tick polls has_work") {
 TEST_CASE("driver: active injection — an io-thread continuation dispatches, no attachment") {
     softdev::device dev(softdev::device::mode::active);
     io_context ctx;
-    CHECK_FALSE(ctx.source_attached(dev)); // active mode registers nothing
+    CHECK_FALSE(ctx.source_attached(dev));
 
     softdev::handle h{&dev};
     std::byte buf[8];
     std::optional<std::size_t> got;
 
-    // The timer continuation is "driver code already running on the io
-    // thread": it completes the parked device op with ctx.dispatch. Both
-    // children ride the same when_all, so lifetimes nest correctly.
     auto flow = ex::when_all(
         io::sleep_for(ctx, 10ms) | ex::then([&] { dev.complete_now(ctx); }),
         io::read(ctx, h, wbytes{buf, sizeof(buf)}) | ex::then([&](std::size_t n) { got = n; }));
@@ -171,14 +152,12 @@ TEST_CASE("driver: detaching from inside on_ready is legal") {
 
     REQUIRE(r);
     CHECK(std::get<0>(*r.value) == 8);
-    CHECK_FALSE(ctx.source_attached(dev)); // retired by its own on_ready
+    CHECK_FALSE(ctx.source_attached(dev));
 
     ctx.run_for(20ms);
 }
 
 TEST_CASE("driver: default fd path is unchanged through the CPO seam") {
-    // The tag_invoke layer must be transparent for kernel objects: io::read
-    // on a pipe still routes to the fd driver and completes with a count.
     io_context ctx;
     int pidfd[2] = {};
     REQUIRE(::pipe(pidfd) == 0);
@@ -204,14 +183,10 @@ TEST_CASE("driver: io::supports capability query with driver overrides") {
     REQUIRE(event_fd >= 0);
     const iox::fd raw{event_fd};
 
-    // fd-driver defaults: registered buffers exist on every ring; the rest
-    // of the optional capabilities are fd-unspecific.
     CHECK(io::supports(io::zero_copy, raw));
     CHECK_FALSE(io::supports(io::mmap, raw));
     CHECK_FALSE(io::supports(io::dma, raw));
 
-    // The device handle customizes both queries it cares about; dma has no
-    // override and no fd backing — not supported.
     const softdev::handle h{};
     CHECK(io::supports(io::zero_copy, h));
     CHECK(io::supports(io::mmap, h));
