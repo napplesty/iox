@@ -30,7 +30,7 @@ jobs:
           set -o pipefail
           # stdexec-heavy TUs can take 2-4 GiB each; cap parallelism so the
           # 4-core runner does not OOM (ninja default = core count)
-          cmake --build build --keep-going -j 2 2>&1 | tee build.log || {
+          cmake --build build -j 2 2>&1 | tee build.log || {
             tail -40 build.log | sed 's/^/::error::/'; exit 1; }
       - name: Test (release)
         run: ./build/iox_tests
