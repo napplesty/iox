@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
       - name: Install ninja and liburing (deterministic recent version)
         run: |
           sudo apt-get update
@@ -24,7 +24,7 @@ jobs:
         run: |
           set -o pipefail
           g++ --version | head -1
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo 2>&1 | tee conf.log || {
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DIOX_BUILD_PYTHON=OFF 2>&1 | tee conf.log || {
             tail -40 conf.log | sed 's/^/::error::/'; exit 1; }
       - name: Build (release)
         run: |
@@ -37,7 +37,7 @@ jobs:
         run: ./build/iox_tests
       - name: Test (ASan + UBSan)
         run: |
-          cmake -S . -B build-asan -G Ninja -DIOX_SANITIZE=ON
+          cmake -S . -B build-asan -G Ninja -DIOX_SANITIZE=ON -DIOX_BUILD_PYTHON=OFF
           cmake --build build-asan -j 2
           ./build-asan/iox_tests
       - name: Header self-containment sweep
@@ -55,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
       - name: Install ninja and liburing (deterministic recent version)
         run: |
           sudo apt-get update
