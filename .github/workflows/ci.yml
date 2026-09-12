@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  cpp:
+    name: C++ (release + ASan + headers)
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install ninja and liburing (deterministic recent version)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          git clone --depth 1 https://github.com/axboe/liburing.git /tmp/liburing
+          (cd /tmp/liburing && ./configure --prefix=/usr/local && make -j"$(nproc)" && sudo make install)
+          sudo ldconfig
+      - name: Configure and build (release)
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build
+      - name: Test (release)
+        run: ./build/iox_tests
+      - name: Test (ASan + UBSan)
+        run: |
+          cmake -S . -B build-asan -G Ninja -DIOX_SANITIZE=ON
+          cmake --build build-asan
+          ./build-asan/iox_tests
+      - name: Header self-containment sweep
+        run: |
+          set -e
+          for h in $(find include -name '*.h' | sort); do
+            printf "#include <$(echo "${h#include/}")>\n" > /tmp/hdr.cc
+            g++ -std=c++23 -fsyntax-only -I include -I third_party/stdexec/include /tmp/hdr.cc
+          done
+          echo "all headers self-contained"
+
+  python:
+    name: Python bindings (nanobind)
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Install ninja and liburing (deterministic recent version)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+          git clone --depth 1 https://github.com/axboe/liburing.git /tmp/liburing
+          (cd /tmp/liburing && ./configure --prefix=/usr/local && make -j"$(nproc)" && sudo make install)
+          sudo ldconfig
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: pip install . (wheel via scikit-build-core)
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+      - name: End-to-end test against the installed module
+        run: python tests/test_python.py
+      - name: In-tree dev build and ctest
+        run: |
+          pip install nanobind
+          cmake -S . -B build-py -G Ninja \
+            -Dnanobind_DIR="$(python -c 'import nanobind; print(nanobind.cmake_dir())')" \
+            -DIOX_BUILD_TESTS=OFF -DIOX_BUILD_EXAMPLES=OFF -DIOX_BUILD_BENCH=OFF
+          cmake --build build-py --target iox_python
+          PYTHONPATH="$(dirname "$(find build-py -name 'iox*.so' | head -1)")" python tests/test_python.py

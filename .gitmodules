@@ -1,0 +1,12 @@
+[submodule "third_party/nanobind"]
+	shallow = true
+	path = third_party/nanobind
+	url = https://github.com/wjakob/nanobind.git
+[submodule "third_party/stdexec"]
+	shallow = true
+	path = third_party/stdexec
+	url = https://github.com/NVIDIA/stdexec.git
+[submodule "third_party/doctest"]
+	shallow = true
+	path = third_party/doctest
+	url = https://github.com/doctest/doctest.git
