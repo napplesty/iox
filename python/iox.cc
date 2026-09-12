@@ -90,11 +90,17 @@ PyFile open_file(PyIOContext& c, const std::string& path, unsigned m) {
 }
 
 std::size_t file_write_at(PyFile& self, nb::bytes data, std::uint64_t offset) {
-    std::string buf(data.c_str(), data.size());
-    return std::get<0>(wait(self.owner->ctx,
-                            io::write_at(self.owner->ctx, self.f,
-                                         rbytes{as_rbytes(std::span<const char>{buf})},
-                                         uoffset_t{offset})));
+    std::string buf(data.c_str(), data.size()); // detach from Python memory
+    std::size_t done = 0; // direct-mode files can short-write at block boundaries
+    while (done < buf.size()) {
+        done += std::get<0>(wait(self.owner->ctx,
+                                 io::write_at(self.owner->ctx, self.f,
+                                              rbytes{as_rbytes(
+                                                  std::span<const char>{buf.data() + done,
+                                                                        buf.size() - done})},
+                                              uoffset_t{offset + done})));
+    }
+    return done;
 }
 
 nb::bytes file_read_at(PyFile& self, std::size_t size, std::uint64_t offset) {
@@ -107,10 +113,11 @@ nb::bytes file_read_at(PyFile& self, std::size_t size, std::uint64_t offset) {
 }
 
 std::size_t file_write(PyFile& self, nb::bytes data) {
-    std::string buf(data.c_str(), data.size());
-    return std::get<0>(wait(self.owner->ctx,
-                            io::write(self.owner->ctx, self.f,
-                                      rbytes{as_rbytes(std::span<const char>{buf})})));
+    std::string buf(data.c_str(), data.size()); // detach from Python memory
+    wait(self.owner->ctx,
+         io::write_all(self.owner->ctx, self.f,
+                       rbytes{as_rbytes(std::span<const char>{buf})}));
+    return buf.size();
 }
 
 nb::bytes file_read(PyFile& self, std::size_t size) {

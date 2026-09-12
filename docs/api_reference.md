@@ -12,7 +12,7 @@
 | `ctx.run()` / `ctx.run_for(d)` | 驱动到 stop / 到期限（可嵌套：内层不记账） |
 | `ex::sync_wait(ctx, sender)` | 驱动到真完成；结果 `{value, error, stopped}`；活 `batch_scope` 内→`EDEADLK` |
 | `ex::sync_wait(ctx, stop_src, sender)` | 外部 stop source（取消入口） |
-| `batch_scope scope{ctx}` | RAII 批量：退出时一次 `io_uring_enter` |
+| `batch_scope scope{ctx}` | RAII 批量：退出时一次 `io_uring_enter`；批内 SQE 执行顺序任意，依赖操作（write→fsync→close）须经完成链表达 |
 | `ctx.arm_failpoint(n, -errno)` | 测试故障注入：第 n 次提交内联失败 |
 
 ## 词汇操作（16 个 CPO，皆可 tag_invoke 定制）

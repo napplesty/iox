@@ -40,7 +40,7 @@ public:
     file() noexcept = default;
 
     static std::expected<file, error> open(const char* path, mode m) noexcept {
-        const int raw = ::open(path, static_cast<int>(m), 0644);
+        const int raw = ::open(path, static_cast<int>(m) | O_CLOEXEC, 0644);
         if (raw < 0) {
             return std::unexpected(error::from_errno(errno));
         }

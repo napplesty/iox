@@ -143,6 +143,8 @@ private:
     source_registry bridge_{};
 };
 
+// SQEs inside one batch execute in any order: dependent ops (write → fsync →
+// close on the same fd) must be chained through completions, not batched.
 class batch_scope {
 public:
     explicit batch_scope(io_context& c) noexcept : ctx_(&c) { ++ctx_->batch_depth_; }
