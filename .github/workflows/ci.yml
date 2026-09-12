@@ -22,6 +22,7 @@ jobs:
           sudo ldconfig
       - name: Configure (release)
         run: |
+          set -o pipefail
           g++ --version | head -1
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo 2>&1 | tee conf.log || {
             tail -40 conf.log | sed 's/^/::error::/'; exit 1; }
