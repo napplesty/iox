@@ -15,7 +15,7 @@
 | `batch_scope scope{ctx}` | RAII 批量：退出时一次 `io_uring_enter`；批内 SQE 执行顺序任意，依赖操作（write→fsync→close）须经完成链表达 |
 | `ctx.arm_failpoint(n, -errno)` | 测试故障注入：第 n 次提交内联失败 |
 
-## 词汇操作（16 个 CPO，皆可 tag_invoke 定制）
+## 词汇操作（19 个 CPO，皆可 tag_invoke 定制）
 
 | 操作 | 完成 | 备注 |
 |---|---|---|
