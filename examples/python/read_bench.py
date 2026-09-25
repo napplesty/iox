@@ -19,25 +19,25 @@ import iox
 
 
 def read_via_iox(path: str, chunk: int) -> int:
-    ctx = iox.Context()
-    f = iox.open_file(ctx, path, iox.Mode.read)
+    context = iox.Context()
+    file = iox.open_file(context, path, iox.Mode.read)
     total = 0
     offset = 0
     while True:
-        data = f.read_at(chunk, offset)
+        data = file.read_at(chunk, offset)
         if not data:
             break
         offset += len(data)
         total += len(data)
-    f.close()
+    file.close()
     return total
 
 
 def read_via_builtin(path: str, chunk: int) -> int:
     total = 0
-    with open(path, "rb", buffering=0) as f:
+    with open(path, "rb", buffering=0) as file:
         while True:
-            data = f.read(chunk)
+            data = file.read(chunk)
             if not data:
                 break
             total += len(data)
@@ -49,19 +49,19 @@ def main() -> int:
     chunk = 1024 * 1024
 
     path = os.path.join(tempfile.mkdtemp(), "iox_bench.bin")
-    with open(path, "wb") as f:
+    with open(path, "wb") as file:
         block = os.urandom(1 << 20)
         for _ in range(mib):
-            f.write(block)
+            file.write(block)
 
     results = {}
-    for name, fn in (("iox (io_uring read_at)", read_via_iox),
-                     ("builtin (buffering=0)", read_via_builtin)):
+    for name, function in (("iox (io_uring read_at)", read_via_iox),
+                           ("builtin (buffering=0)", read_via_builtin)):
         best = 0.0
         for _ in range(3):
-            t0 = time.monotonic()
-            total = fn(path, chunk)
-            best = max(best, total / (1024 * 1024) / (time.monotonic() - t0))
+            started = time.monotonic()
+            total = function(path, chunk)
+            best = max(best, total / (1024 * 1024) / (time.monotonic() - started))
         results[name] = best
 
     for name, speed in results.items():

@@ -19,42 +19,42 @@ int main(int argc, char** argv) {
                                               std::strtoul(argv[1], nullptr, 10))
                                         : 7777;
 
-    iox::io_context ctx;
-    auto acc = iox::net::tcp::acceptor::listen(*iox::net::endpoint::ipv4_any(port));
-    if (!acc) {
-        std::fprintf(stderr, "listen: %s\n", acc.error().message().c_str());
+    iox::io_context context;
+    auto listener = iox::net::tcp::acceptor::listen(*iox::net::endpoint::ipv4_any(port));
+    if (!listener) {
+        std::fprintf(stderr, "listen: %s\n", listener.error().message().c_str());
         return 1;
     }
     std::printf("echoing on 127.0.0.1:%u (Ctrl-C to stop)\n", port);
 
     struct session {
-        iox::net::tcp::socket sock;
-        std::unique_ptr<std::byte[]> buf = std::make_unique<std::byte[]>(4096);
+        iox::net::tcp::socket socket;
+        std::unique_ptr<std::byte[]> buffer = std::make_unique<std::byte[]>(4096);
 
-        explicit session(iox::net::tcp::socket s) : sock(std::move(s)) {}
+        explicit session(iox::net::tcp::socket sock) : socket(std::move(sock)) {}
     };
 
-    auto serve_one = [&](iox::net::tcp::socket s) {
-        auto* sn = new session{std::move(s)};
-        auto body = iox::io::loop(ctx, [sn, &ctx, eof = false]() mutable {
-            return iox::io::read(ctx, sn->sock, iox::wbytes{sn->buf.get(), 4096})
-                 | iox::exec::let_value([sn, &ctx, &eof](std::size_t n) {
-                       eof = (n == 0);
-                       return iox::io::write_all(ctx, sn->sock,
-                                                 iox::rbytes{sn->buf.get(), n});
+    auto serve_one = [&](iox::net::tcp::socket sock) {
+        auto* session_ptr = new session{std::move(sock)};
+        auto body = iox::io::loop(context, [session_ptr, &context, eof = false]() mutable {
+            return iox::io::read(context, session_ptr->socket, iox::wbytes{session_ptr->buffer.get(), 4096})
+                 | iox::exec::let_value([session_ptr, &context, &eof](std::size_t count) {
+                       eof = (count == 0);
+                       return iox::io::write_all(context, session_ptr->socket,
+                                                 iox::rbytes{session_ptr->buffer.get(), count});
                    })
                  | iox::exec::then([&eof]() { return eof; });
         });
         iox::exec::detach(std::move(body) | iox::exec::upon_error([](auto&&) {})
-                                 | iox::exec::then([sn] { delete sn; }));
+                                 | iox::exec::then([session_ptr] { delete session_ptr; }));
     };
 
-    auto accept_loop = iox::io::loop(ctx, [&]() {
-        return iox::io::accept(ctx, *acc) | iox::exec::then(serve_one);
+    auto accept_loop = iox::io::loop(context, [&]() {
+        return iox::io::accept(context, *listener) | iox::exec::then(serve_one);
     });
 
   // The accept loop never yields true; run it detached and serve forever.
     iox::exec::detach(std::move(accept_loop));
-    ctx.run();
+    context.run();
     return 0;
 }

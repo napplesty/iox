@@ -3,8 +3,8 @@
 
 namespace iox::detail {
 
-const char* errno_name(int e) noexcept {
-    switch (e) {
+const char* errno_name(int error_number) noexcept {
+    switch (error_number) {
     case 0: return "OK";
     case EAGAIN: return "EAGAIN";
     case EBADF: return "EBADF";

@@ -26,42 +26,42 @@ struct event {
 class event_range {
 public:
     event_range() noexcept = default;
-    event_range(wbytes buffer, std::size_t n) noexcept
+    event_range(wbytes buffer, std::size_t byte_count) noexcept
         : current_(reinterpret_cast<const char*>(buffer.data())),
-          end_(reinterpret_cast<const char*>(buffer.data()) + n) {}
+          end_(reinterpret_cast<const char*>(buffer.data()) + byte_count) {}
 
     class iterator {
     public:
         iterator() noexcept = default;
-        iterator(const char* p, const char* end) noexcept : p_(p), end_(end) {}
+        iterator(const char* position, const char* end) noexcept : position_(position), end_(end) {}
 
         event operator*() const noexcept {
-            const auto* record = reinterpret_cast<const ::inotify_event*>(p_);
-            const char* name = record->len > 0 ? p_ + sizeof(::inotify_event) : nullptr;
-            std::string_view n;
+            const auto* record = reinterpret_cast<const ::inotify_event*>(position_);
+            const char* name = record->len > 0 ? position_ + sizeof(::inotify_event) : nullptr;
+            std::string_view name_view;
             if (name != nullptr) {
                 const std::size_t room =
                     end_ > name ? static_cast<std::size_t>(end_ - name) : 0;
-                n = std::string_view{name,
+                name_view = std::string_view{name,
                                      ::strnlen(name, std::min<std::size_t>(record->len, room))};
             }
-            return event{record->wd, record->mask, record->cookie, n};
+            return event{record->wd, record->mask, record->cookie, name_view};
         }
 
         iterator& operator++() noexcept {
-            const auto* record = reinterpret_cast<const ::inotify_event*>(p_);
-            p_ += sizeof(::inotify_event) + record->len;
-            if (p_ > end_) {
-                p_ = end_; // a truncated or lying record length must not walk
+            const auto* record = reinterpret_cast<const ::inotify_event*>(position_);
+            position_ += sizeof(::inotify_event) + record->len;
+            if (position_ > end_) {
+                position_ = end_; // a truncated or lying record length must not walk
             }
             return *this;
         }
 
-        friend bool operator==(iterator a, iterator b) noexcept { return a.p_ == b.p_; }
-        friend bool operator!=(iterator a, iterator b) noexcept { return !(a == b); }
+        friend bool operator==(iterator lhs, iterator rhs) noexcept { return lhs.position_ == rhs.position_; }
+        friend bool operator!=(iterator lhs, iterator rhs) noexcept { return !(lhs == rhs); }
 
     private:
-        const char* p_ = nullptr;
+        const char* position_ = nullptr;
         const char* end_ = nullptr;
     };
 
@@ -69,11 +69,11 @@ public:
     iterator end() const noexcept { return iterator{end_, end_}; }
     bool empty() const noexcept { return current_ == end_; }
     std::size_t size() const noexcept {
-        std::size_t n = 0;
-        for (const auto& [[maybe_unused]] e : *this) {
-            ++n;
+        std::size_t count = 0;
+        for (const auto& [[maybe_unused]] entry : *this) {
+            ++count;
         }
-        return n;
+        return count;
     }
 
 private:

@@ -13,7 +13,7 @@ using namespace iox;
 namespace ex = iox::exec;
 
 int main() {
-    io_context ctx;
+    io_context context;
 
     auto to_child = pipe::pair::create();
     auto from_child = pipe::pair::create();
@@ -30,37 +30,37 @@ int main() {
         return 1;
     }
 
-    const std::string_view msg = "hello from iox\n";
-    auto wr = ex::sync_wait(ctx, io::write_all(ctx, to_child->w, as_rbytes(std::span{msg})));
-    if (!wr) {
-        std::fprintf(stderr, "write: %s\n", wr.error ? wr.error->message().c_str() : "?");
+    const std::string_view message = "hello from iox\n";
+    auto write_result = ex::sync_wait(context, io::write_all(context, to_child->w, as_rbytes(std::span{message})));
+    if (!write_result) {
+        std::fprintf(stderr, "write: %s\n", write_result.error ? write_result.error->message().c_str() : "?");
         return 1;
     }
     to_child->w.reset();
 
-    std::byte buf[256];
-    std::string got;
+    std::byte buffer[256];
+    std::string received;
     bool eof = false;
-    auto reader = io::loop(ctx, [&]() {
-        return io::read(ctx, from_child->r, wbytes{buf, sizeof(buf)})
-             | ex::let_value([&](std::size_t n) {
-                   eof = (n == 0);
-                   got.append(reinterpret_cast<const char*>(buf), n);
-                   return ex::just(n == 0);
+    auto reader = io::loop(context, [&]() {
+        return io::read(context, from_child->r, wbytes{buffer, sizeof(buffer)})
+             | ex::let_value([&](std::size_t count) {
+                   eof = (count == 0);
+                   received.append(reinterpret_cast<const char*>(buffer), count);
+                   return ex::just(count == 0);
                });
     });
-    if (!ex::sync_wait(ctx, reader)) {
+    if (!ex::sync_wait(context, reader)) {
         std::fprintf(stderr, "read failed\n");
         return 1;
     }
-    std::printf("child said: %s", got.c_str());
+    std::printf("child said: %s", received.c_str());
 
-    auto st = ex::sync_wait(ctx, io::wait_pid(ctx, *child));
-    if (!st) {
-        std::fprintf(stderr, "wait: %s\n", st.error ? st.error->message().c_str() : "?");
+    auto wait_result = ex::sync_wait(context, io::wait_pid(context, *child));
+    if (!wait_result) {
+        std::fprintf(stderr, "wait: %s\n", wait_result.error ? wait_result.error->message().c_str() : "?");
         return 1;
     }
-    const auto& status = std::get<0>(*st);
+    const auto& status = std::get<0>(*wait_result);
     if (status.success()) {
         std::printf("child exited cleanly (code 0)\n");
     } else if (status.exited) {

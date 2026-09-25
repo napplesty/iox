@@ -18,106 +18,106 @@ using namespace iox;
 namespace ex = iox::exec;
 
 namespace {
-std::string_view view_of(std::span<const std::byte> b, std::size_t n) {
-    return std::string_view{reinterpret_cast<const char*>(b.data()), n};
+std::string_view view_of(std::span<const std::byte> bytes, std::size_t length) {
+    return std::string_view{reinterpret_cast<const char*>(bytes.data()), length};
 }
 }
 
 TEST_CASE("buffer_pool: fixed write/read round trip on pipe") {
-    io_context ctx;
-    auto p = pipe::pair::create();
-    REQUIRE(p);
+    io_context context;
+    auto pair = pipe::pair::create();
+    REQUIRE(pair);
 
-    auto pool = buffer_pool::create(ctx, 4096, 4);
+    auto pool = buffer_pool::create(context, 4096, 4);
     REQUIRE(pool);
     CHECK(pool->available() == 4);
 
-    auto wbuf = pool->take();
-    REQUIRE(wbuf);
-    auto rbuf = pool->take();
-    REQUIRE(rbuf);
+    auto write_buffer = pool->take();
+    REQUIRE(write_buffer);
+    auto read_buffer = pool->take();
+    REQUIRE(read_buffer);
 
-    const std::string_view msg = "registered zero-copy";
-    ::memset(wbuf->data, 0, wbuf->size);
-    ::memcpy(wbuf->data, msg.data(), msg.size());
+    const std::string_view message = "registered zero-copy";
+    ::memset(write_buffer->data, 0, write_buffer->size);
+    ::memcpy(write_buffer->data, message.data(), message.size());
 
-    auto wr = ex::sync_wait(ctx, io::write(ctx, p->w, *wbuf));
-    REQUIRE(wr);
-    CHECK(std::get<0>(*wr) == wbuf->size);
+    auto write_result = ex::sync_wait(context, io::write(context, pair->w, *write_buffer));
+    REQUIRE(write_result);
+    CHECK(std::get<0>(*write_result) == write_buffer->size);
 
-    auto rd = ex::sync_wait(ctx, io::read(ctx, p->r, *rbuf));
-    REQUIRE(rd);
-    CHECK(std::get<0>(*rd) == rbuf->size);
-    CHECK(view_of(rbuf->readable().as_span(), msg.size()) == msg);
+    auto read_result = ex::sync_wait(context, io::read(context, pair->r, *read_buffer));
+    REQUIRE(read_result);
+    CHECK(std::get<0>(*read_result) == read_buffer->size);
+    CHECK(view_of(read_buffer->readable().as_span(), message.size()) == message);
 
-    pool->give_back(*wbuf);
-    pool->give_back(*rbuf);
+    pool->give_back(*write_buffer);
+    pool->give_back(*read_buffer);
     CHECK(pool->available() == 4);
 
-    pool->give_back(*wbuf);
+    pool->give_back(*write_buffer);
     CHECK(pool->available() == 4);
 }
 
 TEST_CASE("buffer_pool: exhaustion is a typed error") {
-    io_context ctx;
-    auto pool = buffer_pool::create(ctx, 4096, 2);
+    io_context context;
+    auto pool = buffer_pool::create(context, 4096, 2);
     REQUIRE(pool);
 
-    auto a = pool->take();
-    auto b = pool->take();
-    REQUIRE(a.has_value());
-    REQUIRE(b.has_value());
+    auto first = pool->take();
+    auto second = pool->take();
+    REQUIRE(first.has_value());
+    REQUIRE(second.has_value());
 
-    auto c = pool->take();
-    REQUIRE_FALSE(c);
-    CHECK(c.error().code() == EBUSY);
+    auto exhausted = pool->take();
+    REQUIRE_FALSE(exhausted);
+    CHECK(exhausted.error().code() == EBUSY);
 
-    pool->give_back(*a);
-    auto d = pool->take();
-    REQUIRE(d);
+    pool->give_back(*first);
+    auto reused = pool->take();
+    REQUIRE(reused);
 }
 
 TEST_CASE("buffer_pool: one table per ring") {
-    io_context ctx;
-    auto first = buffer_pool::create(ctx, 4096, 2);
+    io_context context;
+    auto first = buffer_pool::create(context, 4096, 2);
     REQUIRE(first);
 
-    auto second = buffer_pool::create(ctx, 4096, 2);
+    auto second = buffer_pool::create(context, 4096, 2);
     REQUIRE_FALSE(second);
     CHECK(second.error().code() == EBUSY);
 
     first->reset();
-    auto third = buffer_pool::create(ctx, 4096, 2);
+    auto third = buffer_pool::create(context, 4096, 2);
     REQUIRE(third);
 }
 
 TEST_CASE("buffer_pool: fixed read/write on file") {
-    io_context ctx;
+    io_context context;
     const std::string path = "/tmp/iox_test_mr_" + std::to_string(::getpid());
-    auto f = fs::file::open(path.c_str(), fs::mode::rw | fs::mode::create | fs::mode::truncate);
-    REQUIRE(f);
+    auto file = fs::file::open(path.c_str(), fs::mode::rw | fs::mode::create | fs::mode::truncate);
+    REQUIRE(file);
     struct unlink_on_exit {
-        std::string p;
-        ~unlink_on_exit() { ::unlink(p.c_str()); }
+        std::string path;
+        ~unlink_on_exit() { ::unlink(path.c_str()); }
     } guard{path};
 
-    auto pool = buffer_pool::create(ctx, 8192, 2);
+    auto pool = buffer_pool::create(context, 8192, 2);
     REQUIRE(pool);
 
-    auto wbuf = pool->take();
-    auto rbuf = pool->take();
-    REQUIRE(wbuf.has_value());
-    REQUIRE(rbuf.has_value());
+    auto write_buffer = pool->take();
+    auto read_buffer = pool->take();
+    REQUIRE(write_buffer.has_value());
+    REQUIRE(read_buffer.has_value());
 
-    const std::string_view msg = "fixed path on files";
-    ::memset(wbuf->data, 0, wbuf->size);
-    ::memcpy(wbuf->data, msg.data(), msg.size());
+    const std::string_view message = "fixed path on files";
+    ::memset(write_buffer->data, 0, write_buffer->size);
+    ::memcpy(write_buffer->data, message.data(), message.size());
 
-    auto wr = ex::sync_wait(ctx, io::write_at(ctx, *f, wbuf->readable(), uoffset_t{0}));
-    REQUIRE(wr);
-    CHECK(std::get<0>(*wr) == wbuf->size);
+    auto write_result = ex::sync_wait(context, io::write_at(context, *file, write_buffer->readable(), uoffset_t{0}));
+    REQUIRE(write_result);
+    CHECK(std::get<0>(*write_result) == write_buffer->size);
 
-    auto rd = ex::sync_wait(ctx, io::read_at(ctx, *f, rbuf->writable(), uoffset_t{0}));
-    REQUIRE(rd);
-    CHECK(view_of(rbuf->readable().as_span(), msg.size()) == msg);
+    auto read_result = ex::sync_wait(context, io::read_at(context, *file, read_buffer->writable(), uoffset_t{0}));
+    REQUIRE(read_result);
+    CHECK(view_of(read_buffer->readable().as_span(), message.size()) == message);
 }

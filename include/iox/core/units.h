@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/core/units.h — strong newtypes for positions and sizes (design §四.⑤).
+// iox — core/units.h: strong newtypes for positions and sizes (design §四.⑤).
 #pragma once
 
 #include <cstddef>

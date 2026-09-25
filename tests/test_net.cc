@@ -25,33 +25,33 @@ using namespace std::chrono_literals;
 
 namespace {
 std::uint16_t free_port() {
-    auto a = net::tcp::acceptor::listen(net::endpoint::ipv4_any(0).value());
-    REQUIRE(a);
-    sockaddr_storage ss{};
-    socklen_t len = sizeof(ss);
-    (void)!::getsockname(a->accept_handle().v, reinterpret_cast<sockaddr*>(&ss), &len);
-    return ntohs(reinterpret_cast<sockaddr_in*>(&ss)->sin_port);
+    auto acceptor = net::tcp::acceptor::listen(net::endpoint::ipv4_any(0).value());
+    REQUIRE(acceptor);
+    sockaddr_storage storage{};
+    socklen_t address_length = sizeof(storage);
+    (void)!::getsockname(acceptor->accept_handle().v, reinterpret_cast<sockaddr*>(&storage), &address_length);
+    return ntohs(reinterpret_cast<sockaddr_in*>(&storage)->sin_port);
 }
 }
 
 TEST_CASE("endpoint: parse and format round trips") {
-    auto v4 = net::endpoint::parse("127.0.0.1:8080");
-    REQUIRE(v4);
-    CHECK(v4->to_string() == "127.0.0.1:8080");
-    CHECK(v4->port() == 8080);
+    auto ipv4_endpoint = net::endpoint::parse("127.0.0.1:8080");
+    REQUIRE(ipv4_endpoint);
+    CHECK(ipv4_endpoint->to_string() == "127.0.0.1:8080");
+    CHECK(ipv4_endpoint->port() == 8080);
 
-    auto v6 = net::endpoint::parse("[::1]:9999");
-    REQUIRE(v6);
-    CHECK(v6->family() == net::endpoint::family_t::ipv6);
-    CHECK(v6->port() == 9999);
+    auto ipv6_endpoint = net::endpoint::parse("[::1]:9999");
+    REQUIRE(ipv6_endpoint);
+    CHECK(ipv6_endpoint->family() == net::endpoint::family_t::ipv6);
+    CHECK(ipv6_endpoint->port() == 9999);
 
     auto path = net::endpoint::parse("unix:/tmp/ioxsock");
     REQUIRE(path);
     CHECK(path->to_string() == "/tmp/ioxsock");
 
-    auto abs = net::endpoint::parse("@iox-abstract");
-    REQUIRE(abs);
-    CHECK(abs->to_string() == "@iox-abstract");
+    auto abstract_endpoint = net::endpoint::parse("@iox-abstract");
+    REQUIRE(abstract_endpoint);
+    CHECK(abstract_endpoint->to_string() == "@iox-abstract");
 
     CHECK_FALSE(net::endpoint::parse("no-port-here"));
     CHECK_FALSE(net::endpoint::parse("1.2.3.4:99999"));
@@ -59,175 +59,175 @@ TEST_CASE("endpoint: parse and format round trips") {
 }
 
 TEST_CASE("tcp: accept, connect, echo over loopback") {
-    io_context ctx;
+    io_context context;
     const auto port = free_port();
 
-    auto acc = net::tcp::acceptor::listen(*net::endpoint::ipv4_any(port));
-    REQUIRE(acc);
+    auto acceptor = net::tcp::acceptor::listen(*net::endpoint::ipv4_any(port));
+    REQUIRE(acceptor);
 
     auto client = net::tcp::socket::unconnected(net::endpoint::family_t::ipv4);
     REQUIRE(client);
 
     std::byte buffer[64];
-    auto setup = ex::when_all(io::accept(ctx, *acc), io::connect(ctx, *client, *net::endpoint::ipv4("127.0.0.1", port)));
-    auto done = ex::sync_wait(ctx, setup);
-    REQUIRE(done);
-    auto server_side = std::get<0>(std::move(*done));
+    auto setup = ex::when_all(io::accept(context, *acceptor), io::connect(context, *client, *net::endpoint::ipv4("127.0.0.1", port)));
+    auto setup_result = ex::sync_wait(context, setup);
+    REQUIRE(setup_result);
+    auto server_side = std::get<0>(std::move(*setup_result));
     CHECK(server_side.valid());
 
     auto peer = client->peer();
     REQUIRE(peer);
     CHECK(peer->port() == port);
 
-    const std::string_view msg = "tcp echo";
-    auto wr = ex::sync_wait(ctx, io::write(ctx, *client, as_rbytes(std::span{msg})));
-    REQUIRE(wr);
-    CHECK(std::get<0>(*wr) == msg.size());
+    const std::string_view message = "tcp echo";
+    auto write_result = ex::sync_wait(context, io::write(context, *client, as_rbytes(std::span{message})));
+    REQUIRE(write_result);
+    CHECK(std::get<0>(*write_result) == message.size());
 
-    auto rd = ex::sync_wait(ctx, io::read(ctx, server_side, wbytes{buffer, sizeof(buffer)}));
-    REQUIRE(rd);
-    CHECK(std::string_view{reinterpret_cast<const char*>(buffer), std::get<0>(*rd)} == msg);
+    auto read_result = ex::sync_wait(context, io::read(context, server_side, wbytes{buffer, sizeof(buffer)}));
+    REQUIRE(read_result);
+    CHECK(std::string_view{reinterpret_cast<const char*>(buffer), std::get<0>(*read_result)} == message);
 }
 
 TEST_CASE("tcp: connect to a dead port is a typed error") {
-    io_context ctx;
+    io_context context;
     const auto port = free_port();
 
     auto client = net::tcp::socket::unconnected(net::endpoint::family_t::ipv4);
     REQUIRE(client);
-    auto r = ex::sync_wait(ctx, io::connect(ctx, *client,
+    auto connect_result = ex::sync_wait(context, io::connect(context, *client,
                                             *net::endpoint::ipv4("127.0.0.1", port)));
-    REQUIRE_FALSE(r);
-    REQUIRE(r.error.has_value());
-    CHECK(r.error->code() == ECONNREFUSED);
+    REQUIRE_FALSE(connect_result);
+    REQUIRE(connect_result.error.has_value());
+    CHECK(connect_result.error->code() == ECONNREFUSED);
 }
 
 TEST_CASE("unix: stream acceptor, connect and echo (path and abstract)") {
     for (const std::string_view spec : {"unix:/tmp/iox_test_stream.sock", "@iox-test-abs"}) {
-        io_context ctx;
-        auto ep = net::endpoint::parse(spec);
-        REQUIRE(ep);
+        io_context context;
+        auto endpoint = net::endpoint::parse(spec);
+        REQUIRE(endpoint);
 
-        auto acc = net::unix_dom::acceptor::listen(*ep);
-        REQUIRE(acc);
+        auto acceptor = net::unix_dom::acceptor::listen(*endpoint);
+        REQUIRE(acceptor);
 
         auto client = net::unix_dom::socket::unconnected();
         REQUIRE(client);
 
-        auto setup = ex::when_all(io::accept(ctx, *acc), io::connect(ctx, *client, *ep));
-        auto done = ex::sync_wait(ctx, setup);
-        REQUIRE(done);
-        auto server_side = std::get<0>(std::move(*done));
+        auto setup = ex::when_all(io::accept(context, *acceptor), io::connect(context, *client, *endpoint));
+        auto setup_result = ex::sync_wait(context, setup);
+        REQUIRE(setup_result);
+        auto server_side = std::get<0>(std::move(*setup_result));
 
-        const std::string_view msg = "unix echo";
-        auto wr = ex::sync_wait(ctx, io::write(ctx, *client, as_rbytes(std::span{msg})));
-        REQUIRE(wr);
+        const std::string_view message = "unix echo";
+        auto write_result = ex::sync_wait(context, io::write(context, *client, as_rbytes(std::span{message})));
+        REQUIRE(write_result);
         std::byte buffer[64];
-        auto rd = ex::sync_wait(ctx, io::read(ctx, server_side, wbytes{buffer, sizeof(buffer)}));
-        REQUIRE(rd);
-        CHECK(std::string_view{reinterpret_cast<const char*>(buffer), std::get<0>(*rd)} == msg);
+        auto read_result = ex::sync_wait(context, io::read(context, server_side, wbytes{buffer, sizeof(buffer)}));
+        REQUIRE(read_result);
+        CHECK(std::string_view{reinterpret_cast<const char*>(buffer), std::get<0>(*read_result)} == message);
     }
 }
 
 TEST_CASE("udp: send_to / recv_from with source endpoint") {
-    io_context ctx;
-    const auto port_a = free_port();
-    const auto port_b = free_port();
+    io_context context;
+    const auto sender_port = free_port();
+    const auto receiver_port = free_port();
 
-    auto a = net::udp::socket::open(*net::endpoint::ipv4_any(port_a));
-    auto b = net::udp::socket::open(*net::endpoint::ipv4_any(port_b));
-    REQUIRE(a);
-    REQUIRE(b);
+    auto sender = net::udp::socket::open(*net::endpoint::ipv4_any(sender_port));
+    auto receiver = net::udp::socket::open(*net::endpoint::ipv4_any(receiver_port));
+    REQUIRE(sender);
+    REQUIRE(receiver);
 
-    const std::string_view msg = "udp datagram";
-    auto wr = ex::sync_wait(
-        ctx, io::send_to(ctx, *a, as_rbytes(std::span{msg}),
-                         *net::endpoint::ipv4("127.0.0.1", port_b)));
-    REQUIRE(wr);
-    CHECK(std::get<0>(*wr) == msg.size());
+    const std::string_view message = "udp datagram";
+    auto send_result = ex::sync_wait(
+        context, io::send_to(context, *sender, as_rbytes(std::span{message}),
+                         *net::endpoint::ipv4("127.0.0.1", receiver_port)));
+    REQUIRE(send_result);
+    CHECK(std::get<0>(*send_result) == message.size());
 
     std::byte buffer[128];
-    auto rd = ex::sync_wait(ctx, io::recv_from(ctx, *b, wbytes{buffer, sizeof(buffer)}));
-    REQUIRE(rd);
-    const auto n = std::get<0>(*rd);
-    const auto& from = std::get<1>(*rd);
-    CHECK(std::string_view{reinterpret_cast<const char*>(buffer), n} == msg);
-    CHECK(from.port() == port_a);
+    auto recv_result = ex::sync_wait(context, io::recv_from(context, *receiver, wbytes{buffer, sizeof(buffer)}));
+    REQUIRE(recv_result);
+    const auto byte_count = std::get<0>(*recv_result);
+    const auto& from = std::get<1>(*recv_result);
+    CHECK(std::string_view{reinterpret_cast<const char*>(buffer), byte_count} == message);
+    CHECK(from.port() == sender_port);
 }
 
 TEST_CASE("io::loop: repeats until the body says stop") {
-    io_context ctx;
+    io_context context;
     int iterations = 0;
 
-    auto countdown = io::loop(ctx, [&]() {
+    auto countdown = io::loop(context, [&]() {
         ++iterations;
-        return io::sleep_for(ctx, 1ms) | ex::then([&]() { return iterations >= 5; });
+        return io::sleep_for(context, 1ms) | ex::then([&]() { return iterations >= 5; });
     });
-    auto r = ex::sync_wait(ctx, countdown);
-    REQUIRE(r);
+    auto result = ex::sync_wait(context, countdown);
+    REQUIRE(result);
     CHECK(iterations == 5);
 }
 
 TEST_CASE("io::loop + exec::detach: full echo session lifecycle to EOF") {
-    io_context ctx;
-    auto pr = net::unix_dom::pair::create();
-    REQUIRE(pr);
-    net::unix_dom::socket& a = pr->a;
-    net::unix_dom::socket& b = pr->b;
+    io_context context;
+    auto pair = net::unix_dom::pair::create();
+    REQUIRE(pair);
+    net::unix_dom::socket& session_end = pair->a;
+    net::unix_dom::socket& client_end = pair->b;
 
     auto buffer = std::make_unique<std::byte[]>(64);
     bool session_finished = false;
-    auto session = io::loop(ctx, [&]() {
-                  return io::read(ctx, a, wbytes{buffer.get(), 64})
-                       | ex::let_value([&](std::size_t n) {
-                             return io::write(ctx, a, rbytes{buffer.get(), n});
+    auto session = io::loop(context, [&]() {
+                  return io::read(context, session_end, wbytes{buffer.get(), 64})
+                       | ex::let_value([&](std::size_t byte_count) {
+                             return io::write(context, session_end, rbytes{buffer.get(), byte_count});
                          })
-                       | ex::then([](std::size_t w) { return w == 0; });
+                       | ex::then([](std::size_t bytes_written) { return bytes_written == 0; });
               })
                   | ex::then([&]() { session_finished = true; });
     ex::detach(std::move(session));
 
-    const std::string_view msg = "session lifecycle";
-    auto wr = ex::sync_wait(ctx, io::write(ctx, b, as_rbytes(std::span{msg})));
-    REQUIRE(wr);
+    const std::string_view message = "session lifecycle";
+    auto write_result = ex::sync_wait(context, io::write(context, client_end, as_rbytes(std::span{message})));
+    REQUIRE(write_result);
 
-    std::byte echo_buf[64];
-    auto rd = ex::sync_wait(ctx, io::read(ctx, b, wbytes{echo_buf, sizeof(echo_buf)}));
-    REQUIRE(rd);
-    CHECK(std::string_view{reinterpret_cast<const char*>(echo_buf),
-                           std::get<0>(*rd)} == msg);
+    std::byte echo_buffer[64];
+    auto read_result = ex::sync_wait(context, io::read(context, client_end, wbytes{echo_buffer, sizeof(echo_buffer)}));
+    REQUIRE(read_result);
+    CHECK(std::string_view{reinterpret_cast<const char*>(echo_buffer),
+                           std::get<0>(*read_result)} == message);
 
-    b.reset();
-    ctx.run_for(100ms);
+    client_end.reset();
+    context.run_for(100ms);
 
     CHECK(session_finished);
 }
 
 TEST_CASE("io::write_all: drains a payload larger than the socket buffer") {
-    io_context ctx;
-    auto pr = net::unix_dom::pair::create();
-    REQUIRE(pr);
+    io_context context;
+    auto pair = net::unix_dom::pair::create();
+    REQUIRE(pair);
 
     constexpr std::size_t kSize = 1u << 20;
     auto source = std::make_unique_for_overwrite<std::byte[]>(kSize);
-    for (std::size_t i = 0; i < kSize; ++i) {
-        source[i] = static_cast<std::byte>(i * 31u + 7u);
+    for (std::size_t index = 0; index < kSize; ++index) {
+        source[index] = static_cast<std::byte>(index * 31u + 7u);
     }
-    auto dest = std::make_unique_for_overwrite<std::byte[]>(kSize);
+    auto destination = std::make_unique_for_overwrite<std::byte[]>(kSize);
 
-    ex::detach(io::write_all(ctx, pr->b, rbytes{source.get(), kSize})
-                   | ex::then([&] { pr->b.reset(); }));
+    ex::detach(io::write_all(context, pair->b, rbytes{source.get(), kSize})
+                   | ex::then([&] { pair->b.reset(); }));
 
-    std::size_t got = 0;
-    auto reader = io::loop(ctx, [&]() {
-        return io::read(ctx, pr->a, wbytes{dest.get() + got, kSize - got})
-             | ex::then([&](std::size_t n) {
-                   got += n;
-                   return n == 0;
+    std::size_t received = 0;
+    auto reader = io::loop(context, [&]() {
+        return io::read(context, pair->a, wbytes{destination.get() + received, kSize - received})
+             | ex::then([&](std::size_t byte_count) {
+                   received += byte_count;
+                   return byte_count == 0;
                });
     });
-    REQUIRE(ex::sync_wait(ctx, reader));
+    REQUIRE(ex::sync_wait(context, reader));
 
-    CHECK(got == kSize);
-    CHECK(std::memcmp(source.get(), dest.get(), kSize) == 0);
+    CHECK(received == kSize);
+    CHECK(std::memcmp(source.get(), destination.get(), kSize) == 0);
 }

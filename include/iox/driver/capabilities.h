@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/driver/capabilities.h — runtime secondary capability query (design §四.①):
+// iox — driver/capabilities.h: runtime secondary capability query (design §四.①).
 #pragma once
 
 #include <type_traits>

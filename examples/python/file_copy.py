@@ -18,32 +18,32 @@ def main() -> int:
     if len(sys.argv) not in (3, 4):
         print(__doc__.strip(), file=sys.stderr)
         return 2
-    src_path, dst_path = sys.argv[1], sys.argv[2]
+    source_path, destination_path = sys.argv[1], sys.argv[2]
     chunk = int(sys.argv[3]) * 1024 if len(sys.argv) == 4 else 1024 * 1024
 
-    ctx = iox.Context()
-    src = iox.open_file(ctx, src_path, iox.Mode.read)
-    dst = iox.open_file(ctx, dst_path, iox.Mode.rw | iox.Mode.create | iox.Mode.truncate)
+    context = iox.Context()
+    source = iox.open_file(context, source_path, iox.Mode.read)
+    destination = iox.open_file(context, destination_path, iox.Mode.rw | iox.Mode.create | iox.Mode.truncate)
 
     offset = 0
     total = 0
     started = time.monotonic()
     while True:
-        data = src.read_at(chunk, offset)
+        data = source.read_at(chunk, offset)
         if not data:  # EOF rides as an empty read, same as the C++ vocabulary
             break
-        written = dst.write_at(data, offset)
+        written = destination.write_at(data, offset)
         if written != len(data):
             raise OSError(f"short write: {written} of {len(data)}")
         offset += len(data)
         total += len(data)
-    dst.fsync()
+    destination.fsync()
     elapsed = time.monotonic() - started
 
     mib = total / (1024 * 1024)
     print(f"copied {mib:.1f} MiB in {elapsed:.3f}s ({mib / elapsed:.0f} MiB/s), fsynced")
-    src.close()
-    dst.close()
+    source.close()
+    destination.close()
     return 0
 
 

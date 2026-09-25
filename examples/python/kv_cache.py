@@ -48,8 +48,8 @@ def block_for(key: int) -> bytes:
 class Slab:
     """Fixed-slot slab file: slot i lives at byte offset i * BLOCK."""
 
-    def __init__(self, ctx: iox.Context, path: str, slots: int) -> None:
-        self.file = iox.open_file(ctx, path, iox.Mode.rw | iox.Mode.create | iox.Mode.truncate)
+    def __init__(self, context: iox.Context, path: str, slots: int) -> None:
+        self.file = iox.open_file(context, path, iox.Mode.rw | iox.Mode.create | iox.Mode.truncate)
         self.free = list(range(slots))
         self.where: dict[int, int] = {}
 
@@ -82,18 +82,18 @@ class Slab:
 class Peer:
     """Client side of the fixed protocol: one header, one block."""
 
-    def __init__(self, ctx: iox.Context, host: str, port: int) -> None:
-        self.sock = iox.connect(ctx, host, port)
+    def __init__(self, context: iox.Context, host: str, port: int) -> None:
+        self.sock = iox.connect(context, host, port)
 
     def _recv_exact(self, size: int) -> bytes:
         parts = []
-        got = 0
-        while got < size:
-            chunk = self.sock.recv(size - got)
+        received = 0
+        while received < size:
+            chunk = self.sock.recv(size - received)
             if not chunk:
                 raise EOFError("peer closed mid-frame")
             parts.append(chunk)
-            got += len(chunk)
+            received += len(chunk)
         return b"".join(parts)
 
     def get(self, key: int) -> bytes | None:
@@ -119,7 +119,7 @@ class Peer:
 class TieredPool:
     """DRAM LRU → slab → upstream peer. Puts write through to every tier."""
 
-    def __init__(self, ctx: iox.Context, dram_blocks: int, slab: Slab,
+    def __init__(self, context: iox.Context, dram_blocks: int, slab: Slab,
                  upstream: Peer | None = None) -> None:
         self.dram: dict[int, bytes] = {}
         self.dram_blocks = dram_blocks
@@ -178,13 +178,13 @@ class TieredPool:
 
 def recv_exact(sock, size: int) -> bytes:
     parts = []
-    got = 0
-    while got < size:
-        chunk = sock.recv(size - got)
+    received = 0
+    while received < size:
+        chunk = sock.recv(size - received)
         if not chunk:
             raise EOFError("client closed mid-frame")
         parts.append(chunk)
-        got += len(chunk)
+        received += len(chunk)
     return b"".join(parts)
 
 
@@ -208,10 +208,10 @@ def start_peer(port: int, slab_path: str, state: dict) -> threading.Thread:
     ready = threading.Event()
 
     def run() -> None:
-        ctx = iox.Context()  # this thread's own ring — never shared
-        slab = Slab(ctx, slab_path, slots=256)
-        pool = TieredPool(ctx, dram_blocks=16, slab=slab)
-        listener = iox.listen(ctx, "127.0.0.1", port)
+        context = iox.Context()  # this thread's own ring — never shared
+        slab = Slab(context, slab_path, slots=256)
+        pool = TieredPool(context, dram_blocks=16, slab=slab)
+        listener = iox.listen(context, "127.0.0.1", port)
         state["pool"] = pool
         ready.set()
         conn = listener.accept()
@@ -238,10 +238,10 @@ def free_port() -> int:
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "serve":
         port = int(sys.argv[2]) if len(sys.argv) > 2 else 9020
-        ctx = iox.Context()
-        slab = Slab(ctx, "/tmp/kv-peer.slab", slots=4096)
-        pool = TieredPool(ctx, dram_blocks=1024, slab=slab)
-        listener = iox.listen(ctx, "0.0.0.0", port)
+        context = iox.Context()
+        slab = Slab(context, "/tmp/kv-peer.slab", slots=4096)
+        pool = TieredPool(context, dram_blocks=1024, slab=slab)
+        listener = iox.listen(context, "0.0.0.0", port)
         print(f"kv peer on 0.0.0.0:{port} (dram 1024 blocks, slab 4096 slots)", flush=True)
         while True:
             conn = listener.accept()
@@ -257,10 +257,10 @@ def main() -> int:
     peer_state: dict = {}
     peer_thread = start_peer(port, os.path.join(workdir, "peer.slab"), peer_state)
 
-    ctx = iox.Context()
-    slab = Slab(ctx, os.path.join(workdir, "edge.slab"), slots=8)
-    pool = TieredPool(ctx, dram_blocks=4, slab=slab,
-                       upstream=Peer(ctx, "127.0.0.1", port))
+    context = iox.Context()
+    slab = Slab(context, os.path.join(workdir, "edge.slab"), slots=8)
+    pool = TieredPool(context, dram_blocks=4, slab=slab,
+                       upstream=Peer(context, "127.0.0.1", port))
     print("edge  (this node): dram 4 blocks, slab 8 slots, upstream peer")
     print("peer  (remote):    dram 16 blocks, slab 256 slots")
 

@@ -17,68 +17,68 @@ using namespace iox;
 namespace ex = iox::exec;
 
 TEST_CASE("signal: raise → siginfo completion, signal is consumed") {
-    io_context ctx;
+    io_context context;
     signal::set set{SIGUSR1, SIGUSR2};
-    auto w = signal::watcher::create(set);
-    REQUIRE(w);
+    auto watcher = signal::watcher::create(set);
+    REQUIRE(watcher);
 
     ::raise(SIGUSR1);
-    auto r = ex::sync_wait(ctx, io::signal(ctx, *w));
-    REQUIRE(r);
-    CHECK(std::get<0>(*r).ssi_signo == SIGUSR1);
+    auto result = ex::sync_wait(context, io::signal(context, *watcher));
+    REQUIRE(result);
+    CHECK(std::get<0>(*result).ssi_signo == SIGUSR1);
 
     ::raise(SIGUSR2);
-    auto r2 = ex::sync_wait(ctx, io::signal(ctx, *w));
-    REQUIRE(r2);
-    CHECK(std::get<0>(*r2).ssi_signo == SIGUSR2);
+    auto second_result = ex::sync_wait(context, io::signal(context, *watcher));
+    REQUIRE(second_result);
+    CHECK(std::get<0>(*second_result).ssi_signo == SIGUSR2);
 
 }
 
 TEST_CASE("signal: io::read also works (raw bytes of a siginfo record)") {
-    io_context ctx;
+    io_context context;
     signal::set set{SIGUSR1};
-    auto w = signal::watcher::create(set);
-    REQUIRE(w);
+    auto watcher = signal::watcher::create(set);
+    REQUIRE(watcher);
 
     ::raise(SIGUSR1);
     std::byte raw[sizeof(::signalfd_siginfo)]{};
-    auto r = ex::sync_wait(ctx, io::read(ctx, *w, wbytes{raw, sizeof(raw)}));
-    REQUIRE(r);
-    CHECK(std::get<0>(*r) == sizeof(::signalfd_siginfo));
+    auto result = ex::sync_wait(context, io::read(context, *watcher, wbytes{raw, sizeof(raw)}));
+    REQUIRE(result);
+    CHECK(std::get<0>(*result) == sizeof(::signalfd_siginfo));
 }
 
 TEST_CASE("signal: stop token cancels a pending wait") {
-    io_context ctx;
+    io_context context;
     signal::set set{SIGUSR1};
-    auto w = signal::watcher::create(set);
-    REQUIRE(w);
+    auto watcher = signal::watcher::create(set);
+    REQUIRE(watcher);
 
-    ex::inplace_stop_source src;
+    ex::inplace_stop_source stop_source;
     int stopped = 0;
     struct counting_receiver {
         using receiver_concept = stdexec::receiver_tag;
-        ex::inplace_stop_token tok;
+        ex::inplace_stop_token token;
         int* stopped;
         auto get_env() const noexcept {
-            return stdexec::env{stdexec::prop{stdexec::get_stop_token, tok}};
+            return stdexec::env{stdexec::prop{stdexec::get_stop_token, token}};
         }
         void set_value(::signalfd_siginfo) && noexcept {}
         void set_error(iox::error) && noexcept {}
         void set_error(std::exception_ptr) && noexcept {}
         void set_stopped() && noexcept { ++*stopped; }
     };
-    auto op = stdexec::connect(io::signal(ctx, *w),
-                               counting_receiver{src.get_token(), &stopped});
-    stdexec::start(op);
+    auto operation = stdexec::connect(io::signal(context, *watcher),
+                               counting_receiver{stop_source.get_token(), &stopped});
+    stdexec::start(operation);
 
   // 30ms later, request cancellation from a completion on the io thread.
-    auto canceller = io::sleep_for(ctx, 30ms) | ex::then([&] { src.request_stop(); });
-    REQUIRE(ex::sync_wait(ctx, src, canceller));
-    ctx.run_for(100ms);
+    auto canceller = io::sleep_for(context, 30ms) | ex::then([&] { stop_source.request_stop(); });
+    REQUIRE(ex::sync_wait(context, stop_source, canceller));
+    context.run_for(100ms);
 
     CHECK(stopped == 1);
     ::raise(SIGUSR1);
-    auto drain = ex::sync_wait(ctx, io::signal(ctx, *w));
+    auto drain = ex::sync_wait(context, io::signal(context, *watcher));
     REQUIRE(drain);
 }
 

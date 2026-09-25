@@ -15,7 +15,7 @@ import sys
 import iox
 
 
-def serve_connection(ctx: iox.Context, conn) -> None:
+def serve_connection(context: iox.Context, conn) -> None:
     peer_gone = False
     while not peer_gone:
         data = conn.recv(4096)
@@ -28,12 +28,12 @@ def serve_connection(ctx: iox.Context, conn) -> None:
 def main() -> int:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9000
 
-    ctx = iox.Context()
-    listener = iox.listen(ctx, "127.0.0.1", port)
+    context = iox.Context()
+    listener = iox.listen(context, "127.0.0.1", port)
     print(f"echoing on 127.0.0.1:{port} (ctrl-c to stop)", flush=True)
     while True:
         conn = listener.accept()  # blocks with the GIL released
-        serve_connection(ctx, conn)
+        serve_connection(context, conn)
 
 
 if __name__ == "__main__":

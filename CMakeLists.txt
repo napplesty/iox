@@ -100,7 +100,7 @@ if(IOX_BUILD_PYTHON)
     find_package(nanobind CONFIG REQUIRED) # the checked-out submodule
   endif()
   if(Python_Development.Module_FOUND AND nanobind_FOUND)
-    nanobind_add_module(iox_python python/iox.cc)
+    nanobind_add_module(iox_python python/iox.cc python/async.cc)
     set_target_properties(iox_python PROPERTIES OUTPUT_NAME iox)
     # liburing lives in ~/.local on this class of box; the wheel-installed
     # module needs to find it at import time.
@@ -111,6 +111,9 @@ if(IOX_BUILD_PYTHON)
     if(Python_FOUND)
       add_test(NAME iox_python COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_python.py)
       set_tests_properties(iox_python PROPERTIES
+        ENVIRONMENT PYTHONPATH=$<TARGET_FILE_DIR:iox_python>)
+      add_test(NAME iox_python_async COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_python_async.py)
+      set_tests_properties(iox_python_async PROPERTIES
         ENVIRONMENT PYTHONPATH=$<TARGET_FILE_DIR:iox_python>)
     endif()
   else()

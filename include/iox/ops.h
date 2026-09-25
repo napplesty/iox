@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/ops.h — the unified vocabulary, one include for every operation
+// iox — ops.h: one include for every operation.
 #pragma once
 
 #include "iox/ops/accept.h"

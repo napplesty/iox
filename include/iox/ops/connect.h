@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/ops/connect.h — the socket must be in the unconnected state; completion is successful
+// iox — ops/connect.h: io::connect(context, socket, endpoint) — the socket must be unconnected.
 #pragma once
 
 #include <sys/socket.h>
@@ -14,38 +13,32 @@ namespace iox::io {
 
 namespace detail {
 
-struct connect_policy {
-    struct args_t {
-        sockaddr_storage ss{};
-        socklen_t length = 0;
-    };
-    using signatures = stdexec::completion_signatures<stdexec::set_value_t(),
-                                                stdexec::set_error_t(iox::error), stdexec::set_stopped_t()>;
-    static void prep(io_uring_sqe* sqe, iox::fd f, args_t& a) noexcept {
-        ::io_uring_prep_connect(sqe, f.v, reinterpret_cast<const sockaddr*>(&a.ss), a.length);
-    }
-    using complete = void_complete;
+struct connect_args {
+    sockaddr_storage address{};
+    socklen_t length = 0;
+};
+
+inline void prep_connect(io_uring_sqe* sqe, iox::fd fd, connect_args& args) noexcept {
+    ::io_uring_prep_connect(sqe, fd.v, reinterpret_cast<const sockaddr*>(&args.address), args.length);
+}
+
+struct connect_policy : basic_policy<connect_args, prep_connect, void_complete> {
+    using signatures = io_signatures<>;
 };
 
 }
 
-inline constexpr struct connect_t {
-    template <class H>
-    requires tag_invocable<connect_t, io_context&, H, const net::endpoint&>
-    auto operator()(io_context& ctx, H&& h, const net::endpoint& ep) const
-        noexcept(noexcept(tag_invoke(*this, ctx, std::forward<H>(h), ep)))
-        -> decltype(tag_invoke(*this, ctx, std::forward<H>(h), ep)) {
-        return tag_invoke(*this, ctx, std::forward<H>(h), ep);
-    }
-} connect{};
+struct connect_tag {};
+using connect_t = cpo<connect_tag>;
+inline constexpr connect_t connect{};
 
-template <class H>
-requires connectable<std::remove_cvref_t<H>>
-auto tag_invoke(connect_t, io_context& ctx, H&& h, const net::endpoint& ep) noexcept {
-    detail::connect_policy::args_t a{};
-    std::memcpy(&a.ss, ep.data(), ep.size());
-    a.length = ep.size();
-    return detail::fd_sender<detail::connect_policy>{&ctx, h.connect_handle(), a};
+template <class Handle>
+requires connectable<std::remove_cvref_t<Handle>>
+auto tag_invoke(connect_t, io_context& context, Handle&& handle, const net::endpoint& endpoint) noexcept {
+    detail::connect_policy::args_t args{};
+    std::memcpy(&args.address, endpoint.data(), endpoint.size());
+    args.length = endpoint.size();
+    return detail::fd_sender<detail::connect_policy>{&context, handle.connect_handle(), args};
 }
 
 }

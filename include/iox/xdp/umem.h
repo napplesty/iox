@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/xdp/umem.h — the shared packet memory an AF_XDP socket moves chunks
+// iox — xdp/umem.h: the shared packet memory an AF_XDP socket moves chunks through.
 #pragma once
 
 #include <sys/mman.h>

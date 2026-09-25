@@ -24,8 +24,13 @@ io::read(ctx, sock, buf.wview()) | exec::then(...)   // 同一个词，任何句
 - **Driver SPI**：外部完成源三通道接入（fd 挂载/忙槽/主动注入），NVMe
   （uring_cmd 直通）与 XDP（AF_XDP）为参考驱动，核心零改动接入新硬件。
 - **取消是一等公民**：stop_token → cancel receipt，提交后立即取消的竞态有
-  故障注入用例锁定；优雅退出见 `ioxpump`。
-- **Python API**：nanobind 同步表面、GIL 释放、每线程一个 Context。
+  故障注入用例锁定；跨线程 `request_stop`/`ctx.stop()` 经 eventfd 收件箱
+  转交 io 线程（TSan 干净），`ctx.post(fn, arg)` 为任意跨线程投递口；
+  优雅退出见 `ioxpump`。
+- **Python API**：nanobind 双表面——同步面（GIL 释放、每线程一个 Context、
+  零拷贝 send + `read_at_many` 批量 + `read_into/recv_into`）与 asyncio 面
+  （`AsyncContext` 内建 io 线程，方法返回可 await 的 future，任务取消直达
+  io_uring ASYNC_CANCEL，关闭时自动排空在途操作）。
 
 ## 快速开始
 

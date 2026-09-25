@@ -22,8 +22,8 @@ def main() -> int:
     path = sys.argv[2] if len(sys.argv) == 3 else "/"
 
     address = socket.gethostbyname(host)  # control path: blocking, plain
-    ctx = iox.Context()
-    conn = iox.connect(ctx, address, 80)
+    context = iox.Context()
+    conn = iox.connect(context, address, 80)
     conn.send(f"GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
 
     chunks = []

@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/process/process.h — a spawned child: pid + pidfd.
+// iox — process/process.h: a spawned child: pid + pidfd.
 #pragma once
 
 #include <cstdint>
@@ -13,6 +12,7 @@
 #include <expected>
 #include <optional>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -77,15 +77,14 @@ public:
     }
 
     process() noexcept = default;
-    ~process() { reset(); }
 
     process(process&& other) noexcept
-        : pid_(std::exchange(other.pid_, -1)), pidfd_(std::exchange(other.pidfd_, iox::fd{})) {}
+        : pid_(std::exchange(other.pid_, -1)), pidfd_(std::move(other.pidfd_)) {}
     process& operator=(process&& other) noexcept {
         if (this != &other) {
             reset();
             pid_ = std::exchange(other.pid_, -1);
-            pidfd_ = std::exchange(other.pidfd_, iox::fd{});
+            pidfd_ = std::move(other.pidfd_);
         }
         return *this;
     }
@@ -95,21 +94,18 @@ public:
     bool valid() const noexcept { return pidfd_.valid(); }
 
     ::pid_t pid() const noexcept { return pid_; }
-    iox::fd pidfd() const noexcept { return pidfd_; }
+    iox::fd pidfd() const noexcept { return pidfd_.get(); }
 
-  // Signal the child through the pidfd — race-free by construction.
+    // Signal the child through the pidfd — race-free by construction.
     std::expected<void, error> kill(int sig) const noexcept {
-        if (::syscall(SYS_pidfd_send_signal, pidfd_.v, sig, nullptr, 0) != 0) {
+        if (::syscall(SYS_pidfd_send_signal, pidfd_.get().v, sig, nullptr, 0) != 0) {
             return std::unexpected(error::from_errno(errno));
         }
         return {};
     }
 
     void reset() noexcept {
-        if (pidfd_.valid()) {
-            ::close(pidfd_.v);
-            pidfd_ = iox::fd{};
-        }
+        pidfd_.reset();
         pid_ = -1;
     }
 
@@ -117,7 +113,10 @@ private:
     process(::pid_t pid, int raw_fd) noexcept : pid_(pid), pidfd_(raw_fd) {}
 
     ::pid_t pid_ = -1;
-    iox::fd pidfd_{};
+    iox::unique_fd pidfd_{};
 };
+
+static_assert(std::is_nothrow_move_constructible_v<process> &&
+              !std::is_copy_constructible_v<process>);
 
 }

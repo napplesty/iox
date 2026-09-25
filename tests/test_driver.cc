@@ -27,108 +27,108 @@ using namespace iox;
 
 TEST_CASE("driver: fd-mounted completion source — eventfd doorbell wakes the loop") {
     softdev::device dev(softdev::device::mode::fd_mounted);
-    io_context ctx;
-    ctx.attach_source(dev);
-    REQUIRE(ctx.source_attached(dev));
+    io_context context;
+    context.attach_source(dev);
+    REQUIRE(context.source_attached(dev));
 
-    softdev::handle h{&dev};
-    std::byte buf[8];
+    softdev::handle handle{&dev};
+    std::byte buffer[8];
 
-    std::thread prod([&] {
+    std::thread producer([&] {
         std::this_thread::sleep_for(3ms);
         dev.produce();
     });
 
-    auto r = ex::sync_wait(ctx, io::read(ctx, h, wbytes{buf, sizeof(buf)}));
-    prod.join();
+    auto read_result = ex::sync_wait(context, io::read(context, handle, wbytes{buffer, sizeof(buffer)}));
+    producer.join();
 
-    REQUIRE(r);
-    CHECK(std::get<0>(*r.value) == 8);
-    std::uint64_t rec = 0;
-    std::memcpy(&rec, buf, sizeof(rec));
-    CHECK(rec == 0);
+    REQUIRE(read_result);
+    CHECK(std::get<0>(*read_result.value) == 8);
+    std::uint64_t record = 0;
+    std::memcpy(&record, buffer, sizeof(record));
+    CHECK(record == 0);
 
-    ctx.detach_source(dev);
-    CHECK_FALSE(ctx.source_attached(dev));
-    ctx.run_for(20ms);
+    context.detach_source(dev);
+    CHECK_FALSE(context.source_attached(dev));
+    context.run_for(20ms);
 }
 
 TEST_CASE("driver: busy-slot completion source — ~1ms tick polls has_work") {
     softdev::device dev(softdev::device::mode::busy_slot);
-    io_context ctx;
-    ctx.attach_source(dev);
+    io_context context;
+    context.attach_source(dev);
 
-    softdev::handle h{&dev};
-    std::byte buf[8];
-    const auto t0 = std::chrono::steady_clock::now();
+    softdev::handle handle{&dev};
+    std::byte buffer[8];
+    const auto start_time = std::chrono::steady_clock::now();
 
-    auto r = ex::sync_wait(ctx, io::read(ctx, h, wbytes{buf, sizeof(buf)}));
+    auto read_result = ex::sync_wait(context, io::read(context, handle, wbytes{buffer, sizeof(buffer)}));
 
-    const auto elapsed = std::chrono::steady_clock::now() - t0;
-    REQUIRE(r);
-    CHECK(std::get<0>(*r.value) == 8);
-    std::uint64_t rec = 0;
-    std::memcpy(&rec, buf, sizeof(rec));
-    CHECK(rec == 0);
+    const auto elapsed = std::chrono::steady_clock::now() - start_time;
+    REQUIRE(read_result);
+    CHECK(std::get<0>(*read_result.value) == 8);
+    std::uint64_t record = 0;
+    std::memcpy(&record, buffer, sizeof(record));
+    CHECK(record == 0);
     CHECK(elapsed >= 7ms);
     CHECK(elapsed < 2s);
 
-    ctx.detach_source(dev);
-    ctx.run_for(20ms);
+    context.detach_source(dev);
+    context.run_for(20ms);
 }
 
 TEST_CASE("driver: active injection — an io-thread continuation dispatches, no attachment") {
     softdev::device dev(softdev::device::mode::active);
-    io_context ctx;
-    CHECK_FALSE(ctx.source_attached(dev));
+    io_context context;
+    CHECK_FALSE(context.source_attached(dev));
 
-    softdev::handle h{&dev};
-    std::byte buf[8];
-    std::optional<std::size_t> got;
+    softdev::handle handle{&dev};
+    std::byte buffer[8];
+    std::optional<std::size_t> received;
 
     auto flow = ex::when_all(
-        io::sleep_for(ctx, 10ms) | ex::then([&] { dev.complete_now(ctx); }),
-        io::read(ctx, h, wbytes{buf, sizeof(buf)}) | ex::then([&](std::size_t n) { got = n; }));
+        io::sleep_for(context, 10ms) | ex::then([&] { dev.complete_now(context); }),
+        io::read(context, handle, wbytes{buffer, sizeof(buffer)}) | ex::then([&](std::size_t byte_count) { received = byte_count; }));
 
-    auto r = ex::sync_wait(ctx, flow);
-    REQUIRE(r);
-    REQUIRE(got.has_value());
-    CHECK(*got == 8);
-    std::uint64_t rec = 0;
-    std::memcpy(&rec, buf, sizeof(rec));
-    CHECK(rec == 0);
+    auto result = ex::sync_wait(context, flow);
+    REQUIRE(result);
+    REQUIRE(received.has_value());
+    CHECK(*received == 8);
+    std::uint64_t record = 0;
+    std::memcpy(&record, buffer, sizeof(record));
+    CHECK(record == 0);
 }
 
 TEST_CASE("driver: fd-mounted and busy sources run side by side") {
-    softdev::device a(softdev::device::mode::fd_mounted);
-    softdev::device b(softdev::device::mode::busy_slot);
-    io_context ctx;
-    ctx.attach_source(a);
-    ctx.attach_source(b);
-    REQUIRE(ctx.source_attached(a));
-    REQUIRE(ctx.source_attached(b));
+    softdev::device fd_device(softdev::device::mode::fd_mounted);
+    softdev::device busy_device(softdev::device::mode::busy_slot);
+    io_context context;
+    context.attach_source(fd_device);
+    context.attach_source(busy_device);
+    REQUIRE(context.source_attached(fd_device));
+    REQUIRE(context.source_attached(busy_device));
 
-    softdev::handle first{&a};
-    softdev::handle second{&b};
+    softdev::handle first{&fd_device};
+    softdev::handle second{&busy_device};
     std::byte first_buffer[8];
     std::byte second_buffer[8];
-    std::optional<std::size_t> got_a;
-    std::optional<std::size_t> got_b;
+    std::optional<std::size_t> received_a;
+    std::optional<std::size_t> received_b;
 
-    std::thread prod([&] {
+    std::thread producer([&] {
         std::this_thread::sleep_for(3ms);
-        a.produce();
+        fd_device.produce();
     });
 
     auto flow = ex::when_all(
-        io::read(ctx, first, wbytes{first_buffer, sizeof(first_buffer)}) | ex::then([&](std::size_t n) { got_a = n; }),
-        io::read(ctx, second, wbytes{second_buffer, sizeof(second_buffer)}) | ex::then([&](std::size_t n) { got_b = n; }));
-    auto r = ex::sync_wait(ctx, flow);
-    prod.join();
+        io::read(context, first, wbytes{first_buffer, sizeof(first_buffer)}) | ex::then([&](std::size_t byte_count) { received_a = byte_count; }),
+        io::read(context, second, wbytes{second_buffer, sizeof(second_buffer)}) | ex::then([&](std::size_t byte_count) { received_b = byte_count; }));
+    auto result = ex::sync_wait(context, flow);
+    producer.join();
 
-    REQUIRE(r);
-    CHECK(got_a == 8);
-    CHECK(got_b == 8);
+    REQUIRE(result);
+    CHECK(received_a == 8);
+    CHECK(received_b == 8);
     std::uint64_t first_result = 0;
     std::uint64_t second_result = 0;
     std::memcpy(&first_result, first_buffer, sizeof(first_result));
@@ -136,46 +136,46 @@ TEST_CASE("driver: fd-mounted and busy sources run side by side") {
     CHECK(first_result == 0);
     CHECK(second_result == 0);
 
-    ctx.detach_source(a);
-    ctx.detach_source(b);
-    ctx.run_for(20ms);
+    context.detach_source(fd_device);
+    context.detach_source(busy_device);
+    context.run_for(20ms);
 }
 
 TEST_CASE("driver: detaching from inside on_ready is legal") {
     softdev::device dev(softdev::device::mode::busy_slot, /*self_detach_after_drain=*/true);
-    io_context ctx;
-    ctx.attach_source(dev);
+    io_context context;
+    context.attach_source(dev);
 
-    softdev::handle h{&dev};
-    std::byte buf[8];
-    auto r = ex::sync_wait(ctx, io::read(ctx, h, wbytes{buf, sizeof(buf)}));
+    softdev::handle handle{&dev};
+    std::byte buffer[8];
+    auto read_result = ex::sync_wait(context, io::read(context, handle, wbytes{buffer, sizeof(buffer)}));
 
-    REQUIRE(r);
-    CHECK(std::get<0>(*r.value) == 8);
-    CHECK_FALSE(ctx.source_attached(dev));
+    REQUIRE(read_result);
+    CHECK(std::get<0>(*read_result.value) == 8);
+    CHECK_FALSE(context.source_attached(dev));
 
-    ctx.run_for(20ms);
+    context.run_for(20ms);
 }
 
 TEST_CASE("driver: default fd path is unchanged through the CPO seam") {
-    io_context ctx;
-    int pidfd[2] = {};
-    REQUIRE(::pipe(pidfd) == 0);
+    io_context context;
+    int pipe_fds[2] = {};
+    REQUIRE(::pipe(pipe_fds) == 0);
 
-    auto w = ex::sync_wait(ctx, io::write(ctx, iox::fd{pidfd[1]}, rbytes{
+    auto write_result = ex::sync_wait(context, io::write(context, iox::fd{pipe_fds[1]}, rbytes{
                                                                 reinterpret_cast<const std::byte*>("hi"),
                                                                 2}));
-    REQUIRE(w);
-    CHECK(std::get<0>(*w.value) == 2);
+    REQUIRE(write_result);
+    CHECK(std::get<0>(*write_result.value) == 2);
 
-    std::byte buf[4];
-    auto r = ex::sync_wait(ctx, io::read(ctx, iox::fd{pidfd[0]}, wbytes{buf, sizeof(buf)}));
-    REQUIRE(r);
-    CHECK(std::get<0>(*r.value) == 2);
-    CHECK(std::memcmp(buf, "hi", 2) == 0);
+    std::byte buffer[4];
+    auto read_result = ex::sync_wait(context, io::read(context, iox::fd{pipe_fds[0]}, wbytes{buffer, sizeof(buffer)}));
+    REQUIRE(read_result);
+    CHECK(std::get<0>(*read_result.value) == 2);
+    CHECK(std::memcmp(buffer, "hi", 2) == 0);
 
-    ::close(pidfd[0]);
-    ::close(pidfd[1]);
+    ::close(pipe_fds[0]);
+    ::close(pipe_fds[1]);
 }
 
 TEST_CASE("driver: io::supports capability query with driver overrides") {
@@ -187,10 +187,10 @@ TEST_CASE("driver: io::supports capability query with driver overrides") {
     CHECK_FALSE(io::supports(io::mmap, raw));
     CHECK_FALSE(io::supports(io::dma, raw));
 
-    const softdev::handle h{};
-    CHECK(io::supports(io::zero_copy, h));
-    CHECK(io::supports(io::mmap, h));
-    CHECK_FALSE(io::supports(io::dma, h));
+    const softdev::handle handle{};
+    CHECK(io::supports(io::zero_copy, handle));
+    CHECK(io::supports(io::mmap, handle));
+    CHECK_FALSE(io::supports(io::dma, handle));
 
     ::close(event_fd);
 }

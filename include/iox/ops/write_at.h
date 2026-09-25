@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/ops/write_at.h — strong type: passing a size where an offset belongs does not compile.
+// iox — ops/write_at.h: io::write_at(context, handle, rbytes, uoffset_t); the strong offset type rejects size/offset mixups.
 #pragma once
 
 #include "iox/core/buffer.h"
@@ -11,44 +10,37 @@ namespace iox::io {
 
 namespace detail {
 
-struct write_at_policy {
-    struct args_t {
-        rbytes src{};
-        std::int64_t offset = 0;
-    };
-    using signatures = stdexec::completion_signatures<stdexec::set_value_t(std::size_t),
-                                                stdexec::set_error_t(iox::error), stdexec::set_stopped_t()>;
-    template <class R>
-    static bool immediate(R& r, args_t& a) noexcept {
-        if (a.offset < 0) {
-            stdexec::set_error(std::move(r), iox::error::from_errno(EOVERFLOW));
+struct write_at_args {
+    rbytes source{};
+    std::int64_t offset = 0;
+};
+
+inline void prep_write_at(io_uring_sqe* sqe, iox::fd fd, write_at_args& args) noexcept {
+    ::io_uring_prep_write(sqe, fd.v, args.source.data(), args.source.size(), args.offset);
+}
+
+struct write_at_policy : basic_policy<write_at_args, prep_write_at> {
+    template <class Receiver>
+    static bool immediate(Receiver& receiver, args_t& args) noexcept {
+        if (args.offset < 0) {
+            stdexec::set_error(std::move(receiver), iox::error::from_errno(EOVERFLOW));
             return true;
         }
         return false;
     }
-    static void prep(io_uring_sqe* sqe, iox::fd f, args_t& a) noexcept {
-        ::io_uring_prep_write(sqe, f.v, a.src.data(), a.src.size(), a.offset);
-    }
-    using complete = transfer_complete;
 };
 
 }
 
-inline constexpr struct write_at_t {
-    template <class H>
-    requires tag_invocable<write_at_t, io_context&, H, rbytes, uoffset_t>
-    auto operator()(io_context& ctx, H&& h, rbytes src, uoffset_t at) const
-        noexcept(noexcept(tag_invoke(*this, ctx, std::forward<H>(h), src, at)))
-        -> decltype(tag_invoke(*this, ctx, std::forward<H>(h), src, at)) {
-        return tag_invoke(*this, ctx, std::forward<H>(h), src, at);
-    }
-} write_at{};
+struct write_at_tag {};
+using write_at_t = cpo<write_at_tag>;
+inline constexpr write_at_t write_at{};
 
-template <class H>
-requires std::same_as<std::remove_cvref_t<H>, iox::fd> || write_seekable<std::remove_cvref_t<H>>
-auto tag_invoke(write_at_t, io_context& ctx, H&& h, rbytes src, uoffset_t at) noexcept {
+template <class Handle>
+requires std::same_as<std::remove_cvref_t<Handle>, iox::fd> || write_seekable<std::remove_cvref_t<Handle>>
+auto tag_invoke(write_at_t, io_context& context, Handle&& handle, rbytes source, uoffset_t offset) noexcept {
     return detail::fd_sender<detail::write_at_policy>{
-        &ctx, detail::writer_fd(h), {src, static_cast<std::int64_t>(at.v)}};
+        &context, detail::writer_fd(handle), {source, static_cast<std::int64_t>(offset.v)}};
 }
 
 }

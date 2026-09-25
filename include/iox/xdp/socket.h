@@ -1,5 +1,6 @@
-// iox — unified async IO for Linux
-// include/iox/xdp/socket.h — the AF_XDP (XSK) driver handle (M6, design §六).
+// iox — xdp/socket.h: the AF_XDP (XSK) driver handle (M6, design §六).
+// Chunk lifecycle: one pool — create() lends half to the kernel fill ring and keeps the rest
+// TX-usable; recycle() returns a chunk and tops the fill ring up, so RX never starves and TX never deadlocks.
 #pragma once
 
 #include <linux/if_xdp.h>
@@ -9,6 +10,9 @@
 
 #include <cerrno>
 #include <cstdint>
+#include <deque>
+#include <expected>
+#include <optional>
 #include <vector>
 
 #include "iox/core/fd.h"
@@ -37,6 +41,27 @@ struct ring_view {
     void publish(std::uint32_t p) noexcept { __atomic_store_n(producer, p, __ATOMIC_RELEASE); }
     std::uint32_t free() const noexcept { return mask + 1 - (cached_prod - cons()); }
 };
+
+// Fill-ring share at create: enough to receive, never so many that the first TX finds an empty pool.
+inline std::uint32_t initial_fill(std::size_t chunk_count, std::uint32_t fill_capacity) noexcept {
+    const std::size_t share = chunk_count >= 2 ? chunk_count / 2 : chunk_count;
+    return static_cast<std::uint32_t>(share < fill_capacity ? share : fill_capacity);
+}
+
+// Top the fill ring up to `upto` entries or until the pool runs dry; cons only grows, so one read is conservative.
+inline void refill_fill_ring(ring_view<std::uint64_t>& fill,
+                             std::vector<std::uint64_t>& free_chunks,
+                             std::uint32_t upto) noexcept {
+    std::uint32_t p = fill.cached_prod;
+    const std::uint32_t cons = fill.cons();
+    while (p - cons < upto && !free_chunks.empty()) {
+        fill.desc[p & fill.mask] = free_chunks.back();
+        free_chunks.pop_back();
+        ++p;
+    }
+    fill.cached_prod = p;
+    fill.publish(p);
+}
 
 }
 
@@ -79,10 +104,14 @@ public:
         if (::getsockopt(fd, SOL_XDP, XDP_MMAP_OFFSETS, &off, &optlen) < 0) {
             return std::unexpected(error::from_errno(errno));
         }
-        s.ring_maps_[0] = map_ring(fd, XDP_UMEM_PGOFF_FILL_RING, off.fr, ring_size, s.fill_);
-        s.ring_maps_[1] = map_ring(fd, XDP_UMEM_PGOFF_COMPLETION_RING, off.cr, ring_size, s.comp_);
-        s.ring_maps_[2] = map_ring(fd, XDP_PGOFF_RX_RING, off.rx, ring_size, s.rx_);
-        s.ring_maps_[3] = map_ring(fd, XDP_PGOFF_TX_RING, off.tx, ring_size, s.tx_);
+        s.ring_maps_[0] = map_ring(fd, XDP_UMEM_PGOFF_FILL_RING, off.fr, ring_size, s.fill_,
+                                   s.ring_map_sizes_[0]);
+        s.ring_maps_[1] = map_ring(fd, XDP_UMEM_PGOFF_COMPLETION_RING, off.cr, ring_size, s.comp_,
+                                   s.ring_map_sizes_[1]);
+        s.ring_maps_[2] = map_ring(fd, XDP_PGOFF_RX_RING, off.rx, ring_size, s.rx_,
+                                   s.ring_map_sizes_[2]);
+        s.ring_maps_[3] = map_ring(fd, XDP_PGOFF_TX_RING, off.tx, ring_size, s.tx_,
+                                   s.ring_map_sizes_[3]);
         if (s.ring_maps_[0] == nullptr || s.ring_maps_[1] == nullptr ||
             s.ring_maps_[2] == nullptr || s.ring_maps_[3] == nullptr) {
             return std::unexpected(error::from_errno(errno));
@@ -108,7 +137,7 @@ public:
         for (std::size_t i = 0; i < mem.chunk_count(); ++i) {
             s.free_chunks_.push_back(i * mem.chunk_size());
         }
-        s.push_fill_all();
+        s.refill_fill(detail::initial_fill(mem.chunk_count(), ring_size_int));
         return std::expected<socket, error>{std::move(s)};
     }
 
@@ -117,11 +146,15 @@ public:
     iox::fd completion_fd() const noexcept override { return fd_; }
 
     void on_ready(io_context& ctx) noexcept override {
+        ctx_ = &ctx;
         drain_tx_completions(ctx);
         drain_rx(ctx);
     }
 
-    frame tx_frame() noexcept {
+    std::optional<frame> tx_frame() noexcept {
+        if (free_chunks_.empty()) {
+            return std::nullopt; // pool is lent out; retry after a completion recycles
+        }
         const std::uint64_t address = free_chunks_.back();
         free_chunks_.pop_back();
         return frame{mem_->chunk(address / chunk_size_), 0, address};
@@ -131,7 +164,9 @@ public:
         return mem_->chunk(address / chunk_size_);
     }
 
-    void submit_tx(iox::op_base* op, std::uint64_t address, std::uint32_t len) noexcept {
+    void submit_tx(io_context& ctx, iox::op_base* op, std::uint64_t address,
+                   std::uint32_t len) noexcept {
+        ctx_ = &ctx;
         tx_waiters_.push_back(op);
         if (tx_.free() != 0) {
             const std::uint32_t p = tx_.cached_prod;
@@ -144,35 +179,52 @@ public:
         }
     }
 
-    void submit_rx(iox::op_base* op) noexcept { rx_waiters_.push_back(op); }
+    void submit_rx(io_context& ctx, iox::op_base* op) noexcept {
+        ctx_ = &ctx;
+        rx_waiters_.push_back(op);
+    }
 
     ::xdp_desc take_pending_frame() noexcept {
         const ::xdp_desc d = pending_frames_.front();
-        pending_frames_.erase(pending_frames_.begin());
+        pending_frames_.pop_front();
         return d;
     }
 
-    void recycle(const frame& f) noexcept { free_chunks_.push_back(f.umem_addr); }
+    void recycle(const frame& f) noexcept {
+        free_chunks_.push_back(f.umem_addr);
+        refill_fill(fill_.mask + 1);
+    }
 
     void reset() noexcept {
-        for (void* m : ring_maps_) {
-            if (m != nullptr) {
-                ::munmap(m, 0);
+        if (ctx_ != nullptr) { // a started op must never dangle: fail every waiter
+            for (iox::op_base* op : tx_waiters_) {
+                ctx_->dispatch(reinterpret_cast<std::uint64_t>(op), -ENODEV, 0);
+            }
+            for (iox::op_base* op : rx_waiters_) {
+                ctx_->dispatch(reinterpret_cast<std::uint64_t>(op), -ENODEV, 0);
             }
         }
-        for (void*& m : ring_maps_) {
-            m = nullptr;
+        tx_waiters_.clear();
+        rx_waiters_.clear();
+        for (unsigned i = 0; i < 4; ++i) {
+            if (ring_maps_[i] != nullptr) {
+                ::munmap(ring_maps_[i], ring_map_sizes_[i]);
+                ring_maps_[i] = nullptr;
+                ring_map_sizes_[i] = 0;
+            }
         }
         if (fd_.valid()) {
             ::close(fd_.v);
             fd_ = iox::fd{};
         }
+        ctx_ = nullptr;
     }
 
 private:
     template <class D>
     static void* map_ring(int fd, std::uint64_t pgoff, const xdp_ring_offset& offsets,
-                          std::size_t count, detail::ring_view<D>& out) noexcept {
+                          std::size_t count, detail::ring_view<D>& out,
+                          std::size_t& out_bytes) noexcept {
         const std::size_t bytes = offsets.desc + count * sizeof(D);
         void* p = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
                          fd, pgoff);
@@ -185,6 +237,7 @@ private:
         out.desc = reinterpret_cast<D*>(static_cast<char*>(p) + offsets.desc);
         out.mask = static_cast<std::uint32_t>(count - 1);
         out.cached_prod = 0;
+        out_bytes = bytes;
         return p;
     }
 
@@ -196,6 +249,7 @@ private:
         comp_ = offsets.comp_;
         rx_ = offsets.rx_;
         tx_ = offsets.tx_;
+        ctx_ = offsets.ctx_;
         free_chunks_ = std::move(offsets.free_chunks_);
         tx_waiters_ = std::move(offsets.tx_waiters_);
         rx_waiters_ = std::move(offsets.rx_waiters_);
@@ -203,41 +257,31 @@ private:
         pending_frames_ = std::move(offsets.pending_frames_);
         for (unsigned i = 0; i < 4; ++i) {
             ring_maps_[i] = offsets.ring_maps_[i];
+            ring_map_sizes_[i] = offsets.ring_map_sizes_[i];
             offsets.ring_maps_[i] = nullptr;
+            offsets.ring_map_sizes_[i] = 0;
         }
         offsets.fd_ = iox::fd{};
+        offsets.ctx_ = nullptr;
     }
 
-    void push_fill_all() noexcept {
-        std::uint32_t p = fill_.cached_prod;
-        for (const std::uint64_t address : free_chunks_) {
-            if (fill_.free() == 0) {
-                break;
-            }
-            *reinterpret_cast<std::uint64_t*>(&fill_.desc[p & fill_.mask]) = address;
-            ++p;
-        }
-        fill_.cached_prod = p;
-        fill_.publish(p);
-        free_chunks_.clear();
+    void refill_fill(std::uint32_t upto) noexcept {
+        detail::refill_fill_ring(fill_, free_chunks_, upto);
     }
 
     void drain_tx_completions(io_context& ctx) noexcept {
         const std::uint32_t prod = comp_.prod();
         std::uint32_t cons = comp_.cons();
         while (cons != prod) {
-            const std::uint64_t address =
-                *reinterpret_cast<std::uint64_t*>(&comp_.desc[cons & comp_.mask]);
             ++cons;
-            free_chunks_.push_back(address);
             if (!tx_waiters_.empty()) { // FIFO: copy mode completes in order
                 iox::op_base* op = tx_waiters_.front();
-                tx_waiters_.erase(tx_waiters_.begin());
+                tx_waiters_.pop_front();
                 ctx.dispatch(reinterpret_cast<std::uint64_t>(op), 0, 0);
             }
             if (!tx_backlog_.empty()) {
                 const ::xdp_desc d = tx_backlog_.front();
-                tx_backlog_.erase(tx_backlog_.begin());
+                tx_backlog_.pop_front();
                 const std::uint32_t p = tx_.cached_prod;
                 tx_.desc[p & tx_.mask] = d;
                 tx_.cached_prod = p + 1;
@@ -255,26 +299,29 @@ private:
             const ::xdp_desc d = rx_.desc[cons & rx_.mask];
             ++cons;
             iox::op_base* op = rx_waiters_.front();
-            rx_waiters_.erase(rx_waiters_.begin());
+            rx_waiters_.pop_front();
             pending_frames_.push_back(d);
             ctx.dispatch(reinterpret_cast<std::uint64_t>(op), 0, 0);
         }
         __atomic_store_n(rx_.consumer, cons, __ATOMIC_RELEASE);
+        refill_fill(fill_.mask + 1); // the kernel just freed slots: lend the pool again
     }
 
     iox::fd fd_{};
     const umem* mem_ = nullptr;
+    io_context* ctx_ = nullptr;
     std::size_t chunk_size_ = 0;
     detail::ring_view<std::uint64_t> fill_{};
     detail::ring_view<std::uint64_t> comp_{};
     detail::ring_view<::xdp_desc> rx_{};
     detail::ring_view<::xdp_desc> tx_{};
     std::vector<std::uint64_t> free_chunks_;
-    std::vector<iox::op_base*> tx_waiters_;
-    std::vector<iox::op_base*> rx_waiters_;
-    std::vector<::xdp_desc> tx_backlog_;
-    std::vector<::xdp_desc> pending_frames_;
+    std::deque<iox::op_base*> tx_waiters_;
+    std::deque<iox::op_base*> rx_waiters_;
+    std::deque<::xdp_desc> tx_backlog_;
+    std::deque<::xdp_desc> pending_frames_;
     void* ring_maps_[4]{};
+    std::size_t ring_map_sizes_[4]{};
 };
 
 inline bool tag_invoke(io::detail::supports_t, io::zero_copy_t, const socket&) noexcept {

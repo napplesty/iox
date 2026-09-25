@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/driver/completion_source.h — the external completion bridge (design §六).
+// iox — driver/completion_source.h: the external completion bridge (design §六).
 #pragma once
 
 #include "iox/core/fd.h"

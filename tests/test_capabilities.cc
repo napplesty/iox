@@ -37,21 +37,21 @@ static_assert(!cpo_callable_v<io::close_t, io_context&, out_channel&>);
 static_assert(!cpo_callable_v<io::read_at_t, io_context&, fs::file&, iox::wbytes,
                               iox::io_size_t>);
 
-static_assert(requires(io_context& ctx, pipe::read_end& r, pipe::write_end& w,
-                       fs::file& f, iox::wbytes wb, iox::rbytes rb, iox::uoffset_t o,
-                       iox::registered_buffer& reg) {
-    io::read(ctx, r, wb);
-    io::write(ctx, w, rb);
-    io::read(ctx, f, wb);
-    io::read_at(ctx, f, wb, o);
-    io::write_at(ctx, f, rb, o);
-    io::read(ctx, std_in, wb);
-    io::write(ctx, std_out, rb);
-    io::fsync(ctx, f);
-    io::close(ctx, f);
-    io::close(ctx, w);
-    io::read(ctx, r, reg);
-    io::write(ctx, w, reg);
+static_assert(requires(io_context& context, pipe::read_end& reader, pipe::write_end& writer,
+                       fs::file& file, iox::wbytes write_buffer, iox::rbytes read_buffer, iox::uoffset_t offset,
+                       iox::registered_buffer& registered) {
+    io::read(context, reader, write_buffer);
+    io::write(context, writer, read_buffer);
+    io::read(context, file, write_buffer);
+    io::read_at(context, file, write_buffer, offset);
+    io::write_at(context, file, read_buffer, offset);
+    io::read(context, std_in, write_buffer);
+    io::write(context, std_out, read_buffer);
+    io::fsync(context, file);
+    io::close(context, file);
+    io::close(context, writer);
+    io::read(context, reader, registered);
+    io::write(context, writer, registered);
 });
 
 TEST_CASE("capability proofs are compile-time contracts") {

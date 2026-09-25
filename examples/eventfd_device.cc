@@ -24,85 +24,85 @@ namespace counterdev {
 class device;
 
 struct handle {
-    device* dev = nullptr;
+    device* device_pointer = nullptr;
 };
 
 class device final : public iox::completion_source {
 public:
-    device() : efd_(::eventfd(0, EFD_CLOEXEC)) {}
-    ~device() override { ::close(efd_); }
+    device() : event_fd_(::eventfd(0, EFD_CLOEXEC)) {}
+    ~device() override { ::close(event_fd_); }
     device(const device&) = delete;
     device& operator=(const device&) = delete;
 
-    iox::fd completion_fd() const noexcept override { return iox::fd{efd_}; }
+    iox::fd completion_fd() const noexcept override { return iox::fd{event_fd_}; }
 
-    void on_ready(io_context& ctx) noexcept override {
+    void on_ready(io_context& context) noexcept override {
         std::uint64_t sample = 0;
-        const ssize_t n = ::read(efd_, &sample, sizeof(sample));
-        (void)n;
-        for (iox::op_base* op : pending_) {
-            ctx.dispatch(reinterpret_cast<std::uint64_t>(op),
-                         static_cast<std::int32_t>(sample), 0);
+        const ssize_t count = ::read(event_fd_, &sample, sizeof(sample));
+        (void)count;
+        for (iox::op_base* operation : pending_) {
+            context.dispatch(reinterpret_cast<std::uint64_t>(operation),
+                             static_cast<std::int32_t>(sample), 0);
         }
         pending_.clear();
     }
 
-    void interrupt(std::uint64_t v) noexcept {
-        const std::uint64_t one = v;
-        const ssize_t rang = ::write(efd_, &one, sizeof(one));
-        (void)rang;
+    void interrupt(std::uint64_t value) noexcept {
+        const std::uint64_t one = value;
+        const ssize_t written = ::write(event_fd_, &one, sizeof(one));
+        (void)written;
     }
 
   // Called from the operation's start() on the io thread.
-    void submit(iox::op_base* op) noexcept { pending_.push_back(op); }
+    void submit(iox::op_base* operation) noexcept { pending_.push_back(operation); }
 
 private:
-    int efd_;
+    int event_fd_;
     std::vector<iox::op_base*> pending_; // io thread only
 };
 
-template <class R>
+template <class Receiver>
 struct read_op final : iox::op_base {
-    R r;
+    Receiver receiver;
 
-    explicit read_op(R&& recv) noexcept
-        : op_base(&read_op::on_done), r(std::move(recv)) {}
+    explicit read_op(Receiver&& receiver) noexcept
+        : op_base(&read_op::on_done), receiver(std::move(receiver)) {}
 
     using operation_state_concept = stdexec::operation_state_tag;
 
-    static void on_done(op_base* self, io_context&, std::int32_t res,
+    static void on_done(op_base* self, io_context&, std::int32_t result,
                         std::uint32_t) noexcept {
-        auto* o = static_cast<read_op*>(self);
-        if (res < 0) {
-            stdexec::set_error(std::move(o->r), iox::error::from_negative(res));
+        auto* operation = static_cast<read_op*>(self);
+        if (result < 0) {
+            stdexec::set_error(std::move(operation->receiver), iox::error::from_negative(result));
         } else {
-            stdexec::set_value(std::move(o->r), static_cast<std::uint64_t>(res));
+            stdexec::set_value(std::move(operation->receiver), static_cast<std::uint64_t>(result));
         }
     }
 
-    void start() noexcept { dev->submit(this); }
+    void start() noexcept { device_pointer->submit(this); }
 
-    device* dev = nullptr;
+    device* device_pointer = nullptr;
 };
 
 struct read_sender {
-    device* dev;
+    device* device_pointer;
 
     using sender_concept = stdexec::sender_tag;
     using completion_signatures =
         stdexec::completion_signatures<stdexec::set_value_t(std::uint64_t),
                                        stdexec::set_error_t(iox::error)>;
 
-    template <class Self, class R>
-    auto connect(this Self&& self, R&& r) {
-        read_op<std::remove_cvref_t<R>> op{std::forward<R>(r)};
-        op.dev = self.dev;
-        return op;
+    template <class Self, class Receiver>
+    auto connect(this Self&& self, Receiver&& receiver) {
+        read_op<std::remove_cvref_t<Receiver>> operation{std::forward<Receiver>(receiver)};
+        operation.device_pointer = self.device_pointer;
+        return operation;
     }
 };
 
-inline read_sender tag_invoke(io::read_t, io_context&, handle& h, wbytes) noexcept {
-    return read_sender{h.dev};
+inline read_sender tag_invoke(io::read_t, io_context&, handle& handle, wbytes) noexcept {
+    return read_sender{handle.device_pointer};
 }
 
 inline bool tag_invoke(io::detail::supports_t, io::zero_copy_t, const handle&) noexcept {
@@ -121,36 +121,36 @@ static_assert(iox::driver::registered_driver<counterdev::device>);
 
 int main() {
     using namespace iox;
-    io_context ctx;
+    io_context context;
 
-    counterdev::device dev;
-    ctx.attach_source(dev);
-    counterdev::handle h{&dev};
+    counterdev::device device;
+    context.attach_source(device);
+    counterdev::handle handle{&device};
 
     std::thread producer([&] {
         std::this_thread::sleep_for(30ms);
-        dev.interrupt(7);
+        device.interrupt(7);
         std::this_thread::sleep_for(30ms);
-        dev.interrupt(9);
+        device.interrupt(9);
     });
 
-    const auto first = ex::sync_wait(ctx, io::read(ctx, h, {}));
-    const auto second = ex::sync_wait(ctx, io::read(ctx, h, {}));
+    const auto first = ex::sync_wait(context, io::read(context, handle, iox::wbytes{}));
+    const auto second = ex::sync_wait(context, io::read(context, handle, iox::wbytes{}));
     producer.join();
 
     if (!first || !second) {
         std::fprintf(stderr, "eventfd_device: read failed\n");
         return 1;
     }
-    const auto a = std::get<0>(*first.value);
-    const auto b = std::get<0>(*second.value);
+    const auto first_sample = std::get<0>(*first.value);
+    const auto second_sample = std::get<0>(*second.value);
 
-    ctx.detach_source(dev);
-    ctx.run_for(20ms);
+    context.detach_source(device);
+    context.run_for(20ms);
 
     std::printf("eventfd_device: OK (samples %llu, %llu; zero_copy=%d dma=%d)\n",
-                static_cast<unsigned long long>(a), static_cast<unsigned long long>(b),
-                io::supports(io::zero_copy, h) ? 1 : 0,
-                io::supports(io::dma, h) ? 1 : 0);
-    return (a == 7 && b == 9) ? 0 : 1;
+                static_cast<unsigned long long>(first_sample), static_cast<unsigned long long>(second_sample),
+                io::supports(io::zero_copy, handle) ? 1 : 0,
+                io::supports(io::dma, handle) ? 1 : 0);
+    return (first_sample == 7 && second_sample == 9) ? 0 : 1;
 }

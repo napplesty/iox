@@ -22,6 +22,11 @@ inline void source_registry::source_watch::on_fired(op_base* self, io_context& c
         w.parked = true;
         return;
     }
+    if (res < 0) { // e.g. fd closed before arm: retire instead of spinning on instant errors
+        w.retiring = true;
+        w.parked = true;
+        return;
+    }
     if (res > 0) {
         w.source->on_ready(ctx);
     }
@@ -38,6 +43,9 @@ inline void source_registry::busy_tick::on_fired(op_base* self, io_context& ctx,
     auto& t = *static_cast<busy_tick*>(self);
     t.in_flight = false;
     if (res == -ECANCELED || res == -512) {
+        if (t.active) { // re-attached while the cancel was in flight
+            arm(ctx, t);
+        }
         return;
     }
     for (std::size_t i = 0; i < t.registry->busy_sources_.size(); ++i) {

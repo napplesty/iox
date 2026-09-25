@@ -1,12 +1,11 @@
-// iox — unified async IO for Linux
-// include/iox/pipe/channel.h — typed pipe ends (design §四.①).
+// iox — pipe/channel.h: typed pipe ends (design §四.①).
 #pragma once
+
 #include <fcntl.h>
 #include <unistd.h>
 
-#include <unistd.h>
-
 #include <expected>
+#include <type_traits>
 #include <utility>
 
 #include "iox/core/concepts.h"
@@ -18,71 +17,37 @@ namespace iox::pipe {
 class read_end {
 public:
     read_end() noexcept = default;
-    ~read_end() { reset(); }
-
-    read_end(read_end&& other) noexcept : fd_(std::exchange(other.fd_, iox::fd{})) {}
-    read_end& operator=(read_end&& other) noexcept {
-        if (this != &other) {
-            reset();
-            fd_ = std::exchange(other.fd_, iox::fd{});
-        }
-        return *this;
-    }
-    read_end(const read_end&) = delete;
-    read_end& operator=(const read_end&) = delete;
 
     bool valid() const noexcept { return fd_.valid(); }
 
-    iox::fd read_handle() const noexcept { return fd_; }
-    iox::fd* fd_slot() noexcept { return &fd_; }
+    iox::fd read_handle() const noexcept { return fd_.get(); }
+    iox::fd* fd_slot() noexcept { return fd_.slot(); }
 
-    void reset() noexcept {
-        if (fd_.valid()) {
-            ::close(fd_.v);
-            fd_ = iox::fd{};
-        }
-    }
+    void reset() noexcept { fd_.reset(); }
 
 private:
     friend struct pair;
     explicit read_end(int raw) noexcept : fd_(raw) {}
 
-    iox::fd fd_{};
+    iox::unique_fd fd_{};
 };
 
 class write_end {
 public:
     write_end() noexcept = default;
-    ~write_end() { reset(); }
-
-    write_end(write_end&& other) noexcept : fd_(std::exchange(other.fd_, iox::fd{})) {}
-    write_end& operator=(write_end&& other) noexcept {
-        if (this != &other) {
-            reset();
-            fd_ = std::exchange(other.fd_, iox::fd{});
-        }
-        return *this;
-    }
-    write_end(const write_end&) = delete;
-    write_end& operator=(const write_end&) = delete;
 
     bool valid() const noexcept { return fd_.valid(); }
 
-    iox::fd write_handle() const noexcept { return fd_; }
-    iox::fd* fd_slot() noexcept { return &fd_; }
+    iox::fd write_handle() const noexcept { return fd_.get(); }
+    iox::fd* fd_slot() noexcept { return fd_.slot(); }
 
-    void reset() noexcept {
-        if (fd_.valid()) {
-            ::close(fd_.v);
-            fd_ = iox::fd{};
-        }
-    }
+    void reset() noexcept { fd_.reset(); }
 
 private:
     friend struct pair;
     explicit write_end(int raw) noexcept : fd_(raw) {}
 
-    iox::fd fd_{};
+    iox::unique_fd fd_{};
 };
 
 struct pair {
@@ -101,5 +66,9 @@ struct pair {
 static_assert(io::readable<read_end> && !io::writable<read_end>);
 static_assert(!io::readable<write_end> && io::writable<write_end>);
 static_assert(!io::seekable<read_end> && !io::seekable<write_end>);
+static_assert(std::is_nothrow_move_constructible_v<read_end> &&
+              !std::is_copy_constructible_v<read_end>);
+static_assert(std::is_nothrow_move_constructible_v<write_end> &&
+              !std::is_copy_constructible_v<write_end>);
 
 }

@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/stdio/stream.h — typed standard-stream handles.
+// iox — stdio/stream.h: typed standard-stream handles (non-owning).
 #pragma once
 
 #include "iox/core/concepts.h"

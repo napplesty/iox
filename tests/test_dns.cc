@@ -15,70 +15,70 @@ using namespace iox;
 namespace ex = iox::exec;
 
 TEST_CASE("blocking_pool: delivers a worker value on the io thread") {
-    io_context ctx;
-    blocking_pool pool(ctx);
+    io_context context;
+    blocking_pool pool(context);
 
-    auto r = ex::sync_wait(ctx, pool.run([] { return std::string{"from a worker"}; }));
-    REQUIRE(r);
-    CHECK(std::get<0>(*r) == "from a worker");
+    auto result = ex::sync_wait(context, pool.run([] { return std::string{"from a worker"}; }));
+    REQUIRE(result);
+    CHECK(std::get<0>(*result) == "from a worker");
 }
 
 TEST_CASE("blocking_pool: worker exceptions become set_error(exception_ptr)") {
-    io_context ctx;
-    blocking_pool pool(ctx);
+    io_context context;
+    blocking_pool pool(context);
 
     bool threw = false;
     try {
-        auto r = ex::sync_wait(ctx, pool.run([]() -> int {
+        auto result = ex::sync_wait(context, pool.run([]() -> int {
             throw std::runtime_error{"worker blew up"};
         }));
-        (void)r;
-    } catch (const std::runtime_error& e) {
+        (void)result;
+    } catch (const std::runtime_error& error) {
         threw = true;
-        CHECK(std::string_view{e.what()} == "worker blew up");
+        CHECK(std::string_view{error.what()} == "worker blew up");
     }
     CHECK(threw);
 }
 
 TEST_CASE("blocking_pool: many tasks serialize back correctly") {
-    io_context ctx;
-    blocking_pool pool(ctx, 2);
+    io_context context;
+    blocking_pool pool(context, 2);
 
     int delivered = 0;
-    for (int i = 0; i < 32; ++i) {
-        ex::detach(pool.run([i] { return i * 2; }) | ex::then([&](int v) {
-                      delivered += (v % 2 == 0) ? 1 : 0;
+    for (int index = 0; index < 32; ++index) {
+        ex::detach(pool.run([index] { return index * 2; }) | ex::then([&](int value) {
+                      delivered += (value % 2 == 0) ? 1 : 0;
                   }));
     }
-    ctx.run_for(std::chrono::milliseconds(500));
+    context.run_for(std::chrono::milliseconds(500));
     CHECK(delivered == 32);
 }
 
 TEST_CASE("net::resolve: localhost resolves to a loopback endpoint") {
-    io_context ctx;
-    blocking_pool pool(ctx);
+    io_context context;
+    blocking_pool pool(context);
 
-    auto r = ex::sync_wait(ctx, net::resolve(pool, "localhost", "8080"));
-    REQUIRE(r);
-    const auto& eps = std::get<0>(*r);
-    REQUIRE_FALSE(eps.empty());
+    auto result = ex::sync_wait(context, net::resolve(pool, "localhost", "8080"));
+    REQUIRE(result);
+    const auto& endpoints = std::get<0>(*result);
+    REQUIRE_FALSE(endpoints.empty());
     bool loopback = false;
-    for (const auto& ep : eps) {
-        loopback = loopback || ep.to_string().find("127.0.0.1") == 0 ||
-                   ep.to_string().find("[::1]") == 0;
-        CHECK(ep.port() == 8080);
+    for (const auto& endpoint : endpoints) {
+        loopback = loopback || endpoint.to_string().find("127.0.0.1") == 0 ||
+                   endpoint.to_string().find("[::1]") == 0;
+        CHECK(endpoint.port() == 8080);
     }
     CHECK(loopback);
 }
 
 TEST_CASE("net::resolve: bad host reports an error") {
-    io_context ctx;
-    blocking_pool pool(ctx);
+    io_context context;
+    blocking_pool pool(context);
 
     bool threw = false;
     try {
-        auto r = ex::sync_wait(ctx, net::resolve(pool, "no.such.host.invalid.", "80"));
-        (void)r;
+        auto result = ex::sync_wait(context, net::resolve(pool, "no.such.host.invalid.", "80"));
+        (void)result;
     } catch (const std::system_error&) {
         threw = true;
     }

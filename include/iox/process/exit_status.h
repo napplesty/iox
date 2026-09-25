@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/process/exit_status.h — how a child ended. A small parsed view over the
+// iox — process/exit_status.h: how a child ended (a parsed view over siginfo_t).
 #pragma once
 
 #include <signal.h>

@@ -49,7 +49,7 @@ inline auto tag_invoke(io::read_at_t, io_context& ctx, device& d,
 
 | 模式 | 什么时候 | 怎么做 |
 |---|---|---|
-| **fd 挂载** | 设备有就绪 fd（IRQ fd、xsk fd、完成通道） | `completion_fd()` 返回它；`on_ready()` 排空并 dispatch。零忙耗；`ctx.attach_source(d)` 一行接入 |
+| **fd 挂载** | 设备有就绪 fd（IRQ fd、xsk fd、完成通道） | `completion_fd()` 返回它；`on_ready()` 排空并 dispatch。零忙耗；`ctx.attach_source(d)` 一行接入。fd 失效（poll 提交报错）时 watch 自动 retire，不会空转 |
 | **忙槽** | 无 fd、无线程，工作随时间自变就绪 | `completion_fd()` 返回无效 fd；`has_work()` 返回真时上下文每 ~1ms 调 `on_ready()`。耗 CPU，按定义 |
 | **主动注入** | 驱动代码已在 io 线程上跑（另一个完成/定时器续体内） | 不挂载，直接 `ctx.dispatch(...)`。NVMe uring_cmd 的 CQE 本身走 ring，就属于这类 |
 
@@ -85,5 +85,12 @@ struct my_op final : iox::op_base {   // 地址 + 单函数指针 = 完成协议
 ## 已知边界（v1 诚实清单，ADR-011）
 
 - 驱动操作的 stop_token 接线尚未标准化（fd_sender 词汇自动有；手写 op
-  需要自己在 start() 里 arm）——M6+ 驱动规模化时补 SPI 约定。
+  需要自己在 start() 里 arm）——M6+ 驱动规模化时补 SPI 约定。XDP 的
+  rx/tx op 即属此类：有 `set_stopped` 通道但不响应 stop token。
 - XDP copy 模式 TX 完成按 FIFO 配对；乱序 zerocopy 驱动需要 per-chunk 映射。
+- XDP chunk 生命周期：单一池，`create` 借 `initial_fill`（半数、钳到 fill
+  容量）个 chunk 给内核 fill ring；`recycle()` 回收时回填 fill ring。
+  `tx_frame()` 返回 `std::optional<frame>`——池空（全借出/在飞）时为
+  `nullopt`，等 TX 完成或 RX 回收后重试；TX 完成由 owning op 回收一次，
+  驱动侧不再碰 free list。socket `reset()` 会把所有挂起 waiter 以 ENODEV
+  经 `set_error` 排空，绝不静默悬吊。

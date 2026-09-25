@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/nvme/io.h — the unified vocabulary on the NVMe device: read_at / write_at
+// iox — nvme/io.h: read_at / write_at / fsync on the NVMe device.
 #pragma once
 
 #include <linux/nvme_ioctl.h>
@@ -8,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "iox/core/cpo.h"
 #include "iox/nvme/device.h"
 #include "iox/ops/fsync.h"
 #include "iox/ops/read_at.h"
@@ -42,8 +42,7 @@ struct io_policy {
         std::uint64_t offset = 0;
         bool ring_ok = false;
     };
-    using signatures = stdexec::completion_signatures<stdexec::set_value_t(std::size_t),
-                                                stdexec::set_error_t(iox::error), stdexec::set_stopped_t()>;
+    using signatures = io::io_signatures<std::size_t>;
     template <class R>
     static bool immediate(R& r, args_t& a) noexcept {
         if (a.len == 0) {
@@ -81,8 +80,7 @@ struct flush_policy {
         }
         return false;
     }
-    using signatures = stdexec::completion_signatures<stdexec::set_value_t(),
-                                                stdexec::set_error_t(iox::error), stdexec::set_stopped_t()>;
+    using signatures = io::io_signatures<>;
     static void prep(io_uring_sqe* sqe, iox::fd f, args_t& a) noexcept {
         ::io_uring_prep_uring_cmd(sqe, NVME_URING_CMD_IO, f.v);
         std::memcpy(reinterpret_cast<void*>(sqe->cmd), &a.cmd, sizeof(a.cmd));

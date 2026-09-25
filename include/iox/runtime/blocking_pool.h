@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <exception>
@@ -28,12 +29,13 @@ namespace iox {
 
 class blocking_pool {
 public:
-    explicit blocking_pool(io_context& ctx, unsigned threads = 1) : ctx_(&ctx) {
+    explicit blocking_pool(io_context& context, unsigned threads = 1) : context_(&context) {
         efd_ = ::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
         if (efd_ < 0) {
+            open_error_ = errno;
             return;
         }
-        for (unsigned i = 0; i < threads; ++i) {
+        for (unsigned index = 0; index < threads; ++index) {
             workers_.emplace_back([this] { worker_loop(); });
         }
         arm_wakeup();
@@ -41,30 +43,27 @@ public:
 
     ~blocking_pool() {
         {
-            std::lock_guard lock{mtx_};
+            std::lock_guard lock{mutex_};
             stopping_ = true;
-            cv_.notify_all();
+            condition_.notify_all();
         }
-        for (auto& w : workers_) {
-            if (w.joinable()) {
-                w.join();
+        for (auto& worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
             }
         }
         if (efd_ >= 0) {
             if (wakeup_) {
                 const std::uint64_t one = 1;
                 (void)!::write(efd_, &one, sizeof(one));
-                ctx_->flush();
-                ctx_->run_for(std::chrono::milliseconds(100));
+                context_->flush();
+                context_->run_for(std::chrono::milliseconds(100));
             }
             wakeup_.reset();
-            {
-                std::lock_guard lock{mtx_};
-                for (task_base* t : done_) {
-                    delete t;
-                }
-                done_.clear();
+            for (task_base* task : done_) { // workers are joined: deliver, never strand a receiver
+                task->deliver();
             }
+            done_.clear();
             ::close(efd_);
         }
     }
@@ -80,12 +79,12 @@ public:
         virtual ~task_base() = default;
     };
 
-    template <class F>
+    template <class Function>
     struct sender {
         blocking_pool* pool;
-        F f;
+        Function function;
 
-        using value_t = std::decay_t<std::invoke_result_t<F&>>;
+        using value_t = std::decay_t<std::invoke_result_t<Function&>>;
         static_assert(!std::is_void_v<value_t>,
                       "blocking_pool::run callables must return a value");
 
@@ -94,90 +93,92 @@ public:
             stdexec::set_value_t(value_t), stdexec::set_error_t(iox::error),
             stdexec::set_error_t(std::exception_ptr)>;
 
-        template <class R>
+        template <class Receiver>
         struct op final {
             blocking_pool* pool;
-            F func;
+            Function function;
             void* held = nullptr;
-            R r;
+            Receiver receiver;
 
             using operation_state_concept = stdexec::operation_state_tag;
 
-            op(sender s, R&& recv) : pool(s.pool), func(std::move(s.f)),
-                                     r(std::forward<R>(recv)) {}
+            op(sender source, Receiver&& receiver) : pool(source.pool), function(std::move(source.function)),
+                                     receiver(std::forward<Receiver>(receiver)) {}
 
             void start() noexcept;
         };
 
-        template <class R>
+        template <class Receiver>
         struct cell final : task_base {
-            using op_t = op<R>;
+            using op_t = op<Receiver>;
 
-            F func;
+            Function function;
             std::optional<value_t> value;
             std::exception_ptr exception;
             op_t* owner;
 
-            cell(F func_, op_t* o) : func(std::move(func_)), owner(o) {}
+            cell(Function function, op_t* owner) : function(std::move(function)), owner(owner) {}
 
             void execute() noexcept override {
                 try {
-                    value.emplace(func());
+                    value.emplace(function());
                 } catch (...) {
                     exception = std::current_exception();
                 }
             }
 
             void deliver() noexcept override {
-                op_t* o = owner;
-                auto e = std::move(exception);
-                std::optional<value_t> v = std::move(value);
+                op_t* operation = owner;
+                auto failure = std::move(exception);
+                std::optional<value_t> result = std::move(value);
                 delete this;
-                if (e) {
-                    stdexec::set_error(std::move(o->r), std::move(e));
+                if (failure) {
+                    stdexec::set_error(std::move(operation->receiver), std::move(failure));
                 } else {
-                    stdexec::set_value(std::move(o->r), std::move(*v));
+                    stdexec::set_value(std::move(operation->receiver), std::move(*result));
                 }
             }
         };
 
-        template <class Self, class R>
-        auto connect(this Self&& s, R&& r) {
-            return op<std::remove_cvref_t<R>>(std::forward<Self>(s),
-                                              std::forward<R>(r));
+        template <class Self, class Receiver>
+        auto connect(this Self&& self, Receiver&& receiver) {
+            return op<std::remove_cvref_t<Receiver>>(std::forward<Self>(self),
+                                                     std::forward<Receiver>(receiver));
         }
     };
 
-    template <class F>
-    sender<std::decay_t<F>> run(F&& f) {
-        return {this, std::forward<F>(f)};
+    template <class Function>
+    sender<std::decay_t<Function>> run(Function&& function) {
+        return {this, std::forward<Function>(function)};
     }
 
 private:
-    void submit(task_base* t) noexcept {
+    bool usable() const noexcept { return efd_ >= 0 && !workers_.empty(); }
+
+    void submit(task_base* task) noexcept {
         {
-            std::lock_guard lock{mtx_};
-            pending_.push_back(t);
+            std::lock_guard lock{mutex_};
+            pending_.push_back(task);
         }
-        cv_.notify_one();
+        condition_.notify_one();
     }
 
     void worker_loop() noexcept {
         for (;;) {
-            task_base* t = nullptr;
+            task_base* task = nullptr;
             {
-                std::unique_lock lock{mtx_};
-                cv_.wait(lock, [this] { return stopping_ || !pending_.empty(); });
+                std::unique_lock lock{mutex_};
+                condition_.wait(lock, [this] { return stopping_ || !pending_.empty(); });
                 if (pending_.empty()) {
                     return;
                 }
-                t = pending_.front();
+                task = pending_.front();
                 pending_.pop_front();
             }
-            t->execute();
+            task->execute();
             {
-                std::lock_guard lock{mtx_};
-                done_.push_back(t);
+                std::lock_guard lock{mutex_};
+                done_.push_back(task);
             }
             const std::uint64_t one = 1;
             (void)!::write(efd_, &one, sizeof(one));
@@ -196,7 +197,7 @@ private:
     };
 
     void arm_wakeup() noexcept {
-        wakeup_.emplace(stdexec::connect(io::poll(*ctx_, iox::fd{efd_}, POLLIN),
+        wakeup_.emplace(stdexec::connect(io::poll(*context_, iox::fd{efd_}, POLLIN),
                                          wakeup_receiver{this}));
         stdexec::start(*wakeup_);
     }
@@ -206,11 +207,11 @@ private:
         (void)!::read(efd_, &count, sizeof(count));
         std::deque<task_base*> ready;
         {
-            std::lock_guard lock{mtx_};
+            std::lock_guard lock{mutex_};
             ready.swap(done_);
         }
-        for (task_base* t : ready) {
-            t->deliver();
+        for (task_base* task : ready) {
+            task->deliver();
         }
         if (!stopping_) {
             arm_wakeup();
@@ -221,28 +222,34 @@ private:
         io::poll(std::declval<io_context&>(), iox::fd{}, static_cast<short>(POLLIN)),
         std::declval<wakeup_receiver>()));
 
-    io_context* ctx_ = nullptr;
+    io_context* context_ = nullptr;
     int efd_ = -1;
+    int open_error_ = 0;
     std::vector<std::thread> workers_;
-    std::mutex mtx_;
-    std::condition_variable cv_;
+    std::mutex mutex_;
+    std::condition_variable condition_;
     std::deque<task_base*> pending_;
     std::deque<task_base*> done_;
     std::optional<wakeup_op_t> wakeup_;
-    bool stopping_ = false;
+    std::atomic<bool> stopping_{false};
 };
 
-template <class F>
-template <class R>
-void blocking_pool::sender<F>::op<R>::start() noexcept {
-    using cell_t = typename blocking_pool::sender<F>::template cell<R>;
-    auto* c = new (std::nothrow) cell_t{std::move(func), this};
-    if (c == nullptr) {
-        stdexec::set_error(std::move(r), iox::error::from_errno(ENOMEM));
+template <class Function>
+template <class Receiver>
+void blocking_pool::sender<Function>::op<Receiver>::start() noexcept {
+    if (!pool->usable()) {
+        stdexec::set_error(std::move(receiver),
+                           iox::error::from_errno(pool->open_error_ != 0 ? pool->open_error_ : ENODEV));
         return;
     }
-    held = c;
-    pool->submit(c);
+    using cell_t = typename blocking_pool::sender<Function>::template cell<Receiver>;
+    auto* cell = new (std::nothrow) cell_t{std::move(function), this};
+    if (cell == nullptr) {
+        stdexec::set_error(std::move(receiver), iox::error::from_errno(ENOMEM));
+        return;
+    }
+    held = cell;
+    pool->submit(cell);
 }
 
 }

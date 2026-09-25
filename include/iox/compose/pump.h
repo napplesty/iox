@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/compose/pump.h — io::pump: move every byte from one fd to another with
+// iox — compose/pump.h: io::pump: move every byte from one fd to another.
 #pragma once
 
 #include <fcntl.h>
@@ -15,6 +14,7 @@
 #include <stdexec/execution.hpp>
 
 #include "iox/compose/loop.h"
+#include "iox/core/cpo.h"
 #include "iox/core/error.h"
 #include "iox/core/fd.h"
 #include "iox/ops/fd_sender.h"
@@ -32,8 +32,7 @@ struct pump_stage_policy {
         std::int64_t off_in = -1;
         std::int64_t off_out = -1;
     };
-    using signatures = stdexec::completion_signatures<stdexec::set_value_t(std::size_t),
-                                                stdexec::set_error_t(iox::error), stdexec::set_stopped_t()>;
+    using signatures = io_signatures<std::size_t>;
     template <class R>
     static bool immediate(R& r, args_t& a) noexcept {
         if (a.fail != 0) {
@@ -115,6 +114,7 @@ inline auto pump_impl(io_context* ctx, iox::fd in, iox::fd out, std::size_t chun
     if (chunk == 0) {
         chunk = 1;
     }
+    chunk = std::min<std::size_t>(chunk, 0xFFFFFFFF); // one splice stage is unsigned-bounded
 
     auto bounce_maybe = pipe::pair::create();
     int fail = 0;
@@ -123,10 +123,17 @@ inline auto pump_impl(io_context* ctx, iox::fd in, iox::fd out, std::size_t chun
     ::ssize_t probe = 0;
     if (bounce_maybe) {
         const std::size_t want = std::max<std::size_t>(chunk, 65536) + 4096;
-        (void)::fcntl(bounce_maybe->w.write_handle().v, F_SETPIPE_SZ,
-                      static_cast<int>(want));
+        if (want <= static_cast<std::size_t>(INT32_MAX)) {
+            (void)::fcntl(bounce_maybe->w.write_handle().v, F_SETPIPE_SZ,
+                          static_cast<int>(want));
+        }
         bounce_write_fd = bounce_maybe->w.write_handle().v;
         bounce_read_fd = bounce_maybe->r.read_handle().v;
+        // a stage longer than the real capacity blocks mid-splice: discovering EOF
+        // takes a free pipe slot, and a full pipe has none
+        if (const int cap = ::fcntl(bounce_write_fd, F_GETPIPE_SZ); cap > 4096) {
+            chunk = std::min<std::size_t>(chunk, static_cast<std::size_t>(cap) - 4096);
+        }
         probe = ::splice(in.v, nullptr, bounce_write_fd, nullptr, 1, SPLICE_F_NONBLOCK);
         if (probe < 0 && splice_unsupported(errno)) {
             fail = errno;

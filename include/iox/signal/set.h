@@ -1,11 +1,11 @@
-// iox — unified async IO for Linux
-// include/iox/signal/set.h — the signal mask half of signal handling.
+// iox — signal/set.h: the signal mask half of signal handling.
 #pragma once
 
 #include <pthread.h>
 #include <signal.h>
 
 #include <initializer_list>
+#include <type_traits>
 #include <utility>
 
 namespace iox::signal {
@@ -52,5 +52,7 @@ private:
     ::sigset_t mask_{};
     bool blocking_ = false;
 };
+
+static_assert(std::is_nothrow_move_constructible_v<set> && !std::is_copy_constructible_v<set>);
 
 }

@@ -55,99 +55,106 @@ TEST_CASE("nvme: probe loads geometry (nsid, lba size, capacity)") {
 TEST_CASE("nvme: ops on a non-sqe128 ring are a typed EOPNOTSUPP up front") {
     io_context plain;
     nvme::device inert; // invalid fd is fine: the op never reaches the kernel
-    std::array<std::byte, 4096> buf{};
-    auto r = ex::sync_wait(plain, io::read_at(plain, inert, wbytes{buf.data(), buf.size()},
+    std::array<std::byte, 4096> buffer{};
+    auto read_result = ex::sync_wait(plain, io::read_at(plain, inert, wbytes{buffer.data(), buffer.size()},
                                         uoffset_t{0}));
-    REQUIRE_FALSE(r);
-    REQUIRE(r.error);
-    CHECK(r.error->code() == EOPNOTSUPP);
+    REQUIRE_FALSE(read_result);
+    REQUIRE(read_result.error);
+    CHECK(read_result.error->code() == EOPNOTSUPP);
 }
 
 TEST_CASE("nvme: read_at round-trips LBA0 bytes and is self-consistent") {
     NVME_OR_SKIP()
-    io_context ctx{uring::ring_params{.sqe128 = true}};
-    const std::size_t len = dev.lba_size() * 8;
-    auto buf1 = std::make_unique_for_overwrite<std::byte[]>(len);
-    auto buf2 = std::make_unique_for_overwrite<std::byte[]>(len);
+    io_context context{uring::ring_params{.sqe128 = true}};
+    const std::size_t length = dev.lba_size() * 8;
+    auto buffer1 = std::make_unique_for_overwrite<std::byte[]>(length);
+    auto buffer2 = std::make_unique_for_overwrite<std::byte[]>(length);
 
-    auto r1 = ex::sync_wait(ctx, io::read_at(ctx, dev, wbytes{buf1.get(), len}, uoffset_t{0}));
-    REQUIRE(r1);
-    CHECK(std::get<0>(*r1) == len);
+    auto first_read = ex::sync_wait(context, io::read_at(context, dev, wbytes{buffer1.get(), length}, uoffset_t{0}));
+    REQUIRE(first_read);
+    CHECK(std::get<0>(*first_read) == length);
 
-    auto r2 = ex::sync_wait(ctx, io::read_at(ctx, dev, wbytes{buf2.get(), len}, uoffset_t{0}));
-    REQUIRE(r2);
-    CHECK(std::get<0>(*r2) == len);
-    CHECK(std::memcmp(buf1.get(), buf2.get(), len) == 0);
+    auto second_read = ex::sync_wait(context, io::read_at(context, dev, wbytes{buffer2.get(), length}, uoffset_t{0}));
+    REQUIRE(second_read);
+    CHECK(std::get<0>(*second_read) == length);
+    CHECK(std::memcmp(buffer1.get(), buffer2.get(), length) == 0);
 }
 
 TEST_CASE("nvme: byte/LBA misalignment is a typed EINVAL, zero is a value 0") {
     NVME_OR_SKIP()
-    io_context ctx{uring::ring_params{.sqe128 = true}};
-    std::array<std::byte, 4096> buf{};
-    const auto lbs = dev.lba_size();
+    io_context context{uring::ring_params{.sqe128 = true}};
+    std::array<std::byte, 4096> buffer{};
+    const auto lba_size = dev.lba_size();
 
-    auto mis_off = ex::sync_wait(ctx, io::read_at(ctx, dev, wbytes{buf.data(), buf.size()},
-                                                  uoffset_t{lbs + 1}));
-    REQUIRE_FALSE(mis_off);
-    REQUIRE(mis_off.error);
-    CHECK(mis_off.error->code() == EINVAL);
+    auto misaligned_offset_result = ex::sync_wait(context, io::read_at(context, dev, wbytes{buffer.data(), buffer.size()},
+                                                  uoffset_t{lba_size + 1}));
+    REQUIRE_FALSE(misaligned_offset_result);
+    REQUIRE(misaligned_offset_result.error);
+    CHECK(misaligned_offset_result.error->code() == EINVAL);
 
-    auto mis_len = ex::sync_wait(ctx, io::read_at(ctx, dev,
-                                                  wbytes{buf.data(), lbs + 1}, uoffset_t{0}));
-    REQUIRE_FALSE(mis_len);
-    CHECK(mis_len.error->code() == EINVAL);
+    auto misaligned_length_result = ex::sync_wait(context, io::read_at(context, dev,
+                                                  wbytes{buffer.data(), lba_size + 1}, uoffset_t{0}));
+    REQUIRE_FALSE(misaligned_length_result);
+    CHECK(misaligned_length_result.error->code() == EINVAL);
 
-    auto zero = ex::sync_wait(ctx, io::read_at(ctx, dev, wbytes{buf.data(), 0}, uoffset_t{0}));
-    REQUIRE(zero);
-    CHECK(std::get<0>(*zero) == 0);
+    auto zero_length_result = ex::sync_wait(context, io::read_at(context, dev, wbytes{buffer.data(), 0}, uoffset_t{0}));
+    REQUIRE(zero_length_result);
+    CHECK(std::get<0>(*zero_length_result) == 0);
 }
 
 TEST_CASE("nvme: fsync is a CACHE FLUSH passthu (or a typed refusal)") {
     NVME_OR_SKIP()
-    io_context ctx{uring::ring_params{.sqe128 = true}};
-    auto r = ex::sync_wait(ctx, io::fsync(ctx, dev));
-    if (!r) {
-        REQUIRE(r.error);
-        CHECK(r.error->code() == EACCES);
+    io_context context{uring::ring_params{.sqe128 = true}};
+    auto result = ex::sync_wait(context, io::fsync(context, dev));
+    if (!result) {
+        REQUIRE(result.error);
+        CHECK(result.error->code() == EACCES);
     }
 }
 
 TEST_CASE("nvme: io::close clears the device's fd slot on completion") {
     NVME_OR_SKIP()
-    io_context ctx{uring::ring_params{.sqe128 = true}};
-    auto w = ex::sync_wait(ctx, io::close(ctx, dev));
-    REQUIRE(w);
+    io_context context{uring::ring_params{.sqe128 = true}};
+    auto close_result = ex::sync_wait(context, io::close(context, dev));
+    REQUIRE(close_result);
     CHECK_FALSE(dev.valid());
 }
 
 #ifdef IOX_NVME_TEST_WRITE
 TEST_CASE("nvme: write_at round-trip on the LAST LBA (explicit opt-in only)") {
     NVME_OR_SKIP()
-    io_context ctx{uring::ring_params{.sqe128 = true}};
-    const std::size_t len = dev.lba_size();
-    const std::uint64_t off = dev.size_bytes() - len;
-    auto src = std::make_unique_for_overwrite<std::byte[]>(len);
-    auto back = std::make_unique_for_overwrite<std::byte[]>(len);
-    for (std::size_t i = 0; i < len; ++i) {
-        src[i] = static_cast<std::byte>(0x5A ^ (i & 0xFF));
+    io_context context{uring::ring_params{.sqe128 = true}};
+    const std::size_t length = dev.lba_size();
+    const std::uint64_t offset = dev.size_bytes() - length;
+    auto source = std::make_unique_for_overwrite<std::byte[]>(length);
+    auto back = std::make_unique_for_overwrite<std::byte[]>(length);
+    for (std::size_t index = 0; index < length; ++index) {
+        source[index] = static_cast<std::byte>(0x5A ^ (index & 0xFF));
     }
 
-    auto w = ex::sync_wait(ctx, io::write_at(ctx, dev, rbytes{src.get(), len}, uoffset_t{off}));
-    REQUIRE(w);
-    CHECK(std::get<0>(*w) == len);
+    auto write_result = ex::sync_wait(context, io::write_at(context, dev, rbytes{source.get(), length}, uoffset_t{offset}));
+    REQUIRE(write_result);
+    CHECK(std::get<0>(*write_result) == length);
 
-    auto f = ex::sync_wait(ctx, io::fsync(ctx, dev));
-    REQUIRE(f);
+    auto fsync_result = ex::sync_wait(context, io::fsync(context, dev));
+    REQUIRE(fsync_result);
 
-    auto r = ex::sync_wait(ctx, io::read_at(ctx, dev, wbytes{back.get(), len}, uoffset_t{off}));
-    REQUIRE(r);
-    CHECK(std::memcmp(src.get(), back.get(), len) == 0);
+    auto read_result = ex::sync_wait(context, io::read_at(context, dev, wbytes{back.get(), length}, uoffset_t{offset}));
+    REQUIRE(read_result);
+    CHECK(std::memcmp(source.get(), back.get(), length) == 0);
 }
 #endif
 
 TEST_CASE("nvme: capability answers — device DMA is zero-copy direct") {
-    const nvme::device* d = nullptr;
-    CHECK(io::supports(io::zero_copy, *d));
-    CHECK(io::supports(io::dma, *d));
-    CHECK_FALSE(io::supports(io::mmap, *d));
+    const nvme::device* device = nullptr;
+    CHECK(io::supports(io::zero_copy, *device));
+    CHECK(io::supports(io::dma, *device));
+    CHECK_FALSE(io::supports(io::mmap, *device));
+}
+
+TEST_CASE("nvme: passthru node names map to their sysfs block entries") {
+    CHECK(std::string{nvme::block_suffix("ng0n1")} == "0n1");
+    CHECK(std::string{nvme::block_suffix("nvme0n1")} == "0n1");
+    CHECK(std::string{nvme::block_suffix("nvme0")} == "0");
+    CHECK(std::string{nvme::block_suffix("sda")} == "sda");
 }

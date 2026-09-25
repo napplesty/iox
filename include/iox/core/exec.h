@@ -32,13 +32,13 @@ struct sync_wait_result {
 
 namespace detail {
 
-template <class Sndr>
+template <class Sender>
 struct sync_wait_state {
-    io_context* ctx;
+    io_context* context;
     stdexec::inplace_stop_source internal_stop_source;
     stdexec::inplace_stop_source* stop_source = &internal_stop_source;
     bool done = false;
-    using values_variant = stdexec::value_types_of_t<Sndr, stdexec::env<>>;
+    using values_variant = stdexec::value_types_of_t<Sender, stdexec::env<>>;
     static_assert(std::variant_size_v<values_variant> == 1,
                   "iox::exec::sync_wait requires a monomorphic value channel");
     using values_t = std::variant_alternative_t<0, values_variant>;
@@ -47,80 +47,80 @@ struct sync_wait_state {
     std::exception_ptr exception;
 };
 
-template <class Sndr>
+template <class Sender>
 struct sync_wait_receiver {
     using receiver_concept = stdexec::receiver_tag;
-    using state_t = sync_wait_state<Sndr>;
-    state_t* st;
+    using state_t = sync_wait_state<Sender>;
+    state_t* state;
 
     auto get_env() const noexcept {
-        return stdexec::env{stdexec::prop{stdexec::get_stop_token, st->stop_source->get_token()}};
+        return stdexec::env{stdexec::prop{stdexec::get_stop_token, state->stop_source->get_token()}};
     }
 
     void finish() noexcept {
-        st->done = true;
-        st->ctx->stop();
+        state->done = true;
+        state->context->stop();
     }
 
-    template <class... As>
-    void set_value(As&&... as) && noexcept {
-        st->value.emplace(std::forward<As>(as)...);
+    template <class... Args>
+    void set_value(Args&&... args) && noexcept {
+        state->value.emplace(std::forward<Args>(args)...);
         finish();
     }
 
-    void set_error(iox::error e) && noexcept {
-        st->error = e;
+    void set_error(iox::error error) && noexcept {
+        state->error = error;
         finish();
     }
 
-    void set_error(std::exception_ptr e) && noexcept {
-        st->exception = std::move(e);
+    void set_error(std::exception_ptr exception) && noexcept {
+        state->exception = std::move(exception);
         finish();
     }
 
     void set_stopped() && noexcept { finish(); }
 };
 
-template <class Sndr>
-auto sync_wait_impl(io_context& ctx, stdexec::inplace_stop_source* stop_source,
-                    Sndr&& sndr) {
-    if (ctx.in_batch()) {
-        using values_t = typename sync_wait_state<Sndr>::values_t;
+template <class Sender>
+auto sync_wait_impl(io_context& context, stdexec::inplace_stop_source* stop_source,
+                    Sender&& sender) {
+    if (context.in_batch()) {
+        using values_t = typename sync_wait_state<Sender>::values_t;
         return sync_wait_result<values_t>{std::nullopt, iox::error::from_errno(EDEADLK),
                                         false};
     }
-    sync_wait_state<Sndr> st{&ctx};
+    sync_wait_state<Sender> state{&context};
     if (stop_source != nullptr) {
-        st.stop_source = stop_source;
+        state.stop_source = stop_source;
     }
-    auto op = stdexec::connect(std::forward<Sndr>(sndr),
-                               sync_wait_receiver<Sndr>{&st});
-    stdexec::start(op);
-    while (!st.done) {
-        ctx.restart();
-        ctx.run();
+    auto operation = stdexec::connect(std::forward<Sender>(sender),
+                                      sync_wait_receiver<Sender>{&state});
+    stdexec::start(operation);
+    while (!state.done) {
+        context.restart();
+        context.run();
     }
-    ctx.restart();
+    context.restart();
 
-    if (st.exception) {
-        std::rethrow_exception(st.exception);
+    if (state.exception) {
+        std::rethrow_exception(state.exception);
     }
-    using values_t = typename sync_wait_state<Sndr>::values_t;
-    const bool stopped = !st.value.has_value() && !st.error.has_value();
-    return sync_wait_result<values_t>{std::move(st.value), std::move(st.error), stopped};
+    using values_t = typename sync_wait_state<Sender>::values_t;
+    const bool stopped = !state.value.has_value() && !state.error.has_value();
+    return sync_wait_result<values_t>{std::move(state.value), std::move(state.error), stopped};
 }
 
 }
 
-template <class Sndr>
-auto sync_wait(io_context& ctx, Sndr&& sndr) {
-    return detail::sync_wait_impl(ctx, static_cast<stdexec::inplace_stop_source*>(nullptr),
-                                  std::forward<Sndr>(sndr));
+template <class Sender>
+auto sync_wait(io_context& context, Sender&& sender) {
+    return detail::sync_wait_impl(context, static_cast<stdexec::inplace_stop_source*>(nullptr),
+                                  std::forward<Sender>(sender));
 }
 
-template <class Sndr>
-auto sync_wait(io_context& ctx, stdexec::inplace_stop_source& stop_source, Sndr&& sndr) {
-    return detail::sync_wait_impl(ctx, &stop_source, std::forward<Sndr>(sndr));
+template <class Sender>
+auto sync_wait(io_context& context, stdexec::inplace_stop_source& stop_source, Sender&& sender) {
+    return detail::sync_wait_impl(context, &stop_source, std::forward<Sender>(sender));
 }
 
 }

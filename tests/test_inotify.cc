@@ -40,72 +40,72 @@ struct recorded {
     std::string name;
 };
 
-std::vector<recorded> read_events(io_context& ctx, fs::watcher& w) {
-    std::array<std::byte, 4096> buf{};
-    auto r = ex::sync_wait(ctx, io::read(ctx, w, wbytes{buf.data(), buf.size()}));
-    REQUIRE(r);
-    const std::size_t n = std::get<0>(*r);
-    std::vector<recorded> out;
-    for (const auto& e : fs::event_range{wbytes{buf.data(), buf.size()}, n}) {
-        out.push_back({e.mask, std::string{e.name}});
+std::vector<recorded> read_events(io_context& context, fs::watcher& watcher) {
+    std::array<std::byte, 4096> buffer{};
+    auto result = ex::sync_wait(context, io::read(context, watcher, wbytes{buffer.data(), buffer.size()}));
+    REQUIRE(result);
+    const std::size_t byte_count = std::get<0>(*result);
+    std::vector<recorded> events;
+    for (const auto& event : fs::event_range{wbytes{buffer.data(), buffer.size()}, byte_count}) {
+        events.push_back({event.mask, std::string{event.name}});
     }
-    return out;
+    return events;
 }
 
 }
 
 TEST_CASE("fs::watcher: create, modify and delete carry the name") {
-    io_context ctx;
+    io_context context;
     temp_dir dir;
-    auto w = fs::watcher::create();
-    REQUIRE(w);
-    auto wd = w->add(dir.value, IN_CREATE | IN_MODIFY | IN_DELETE);
+    auto watcher = fs::watcher::create();
+    REQUIRE(watcher);
+    auto wd = watcher->add(dir.value, IN_CREATE | IN_MODIFY | IN_DELETE);
     REQUIRE(wd);
 
     {
-        FILE* f = std::fopen((dir.value + "/test.txt").c_str(), "w");
-        REQUIRE(f != nullptr);
-        std::fputs("hello", f);
-        std::fclose(f);
+        FILE* file = std::fopen((dir.value + "/test.txt").c_str(), "w");
+        REQUIRE(file != nullptr);
+        std::fputs("hello", file);
+        std::fclose(file);
     }
-    auto events = read_events(ctx, *w);
+    auto events = read_events(context, *watcher);
     REQUIRE_FALSE(events.empty());
     bool saw_create = false;
     bool saw_modify = false;
-    for (const auto& e : events) {
-        if (e.name == "test.txt") {
-            saw_create = saw_create || (e.mask & IN_CREATE);
-            saw_modify = saw_modify || (e.mask & IN_MODIFY);
+    for (const auto& event : events) {
+        if (event.name == "test.txt") {
+            saw_create = saw_create || (event.mask & IN_CREATE);
+            saw_modify = saw_modify || (event.mask & IN_MODIFY);
         }
     }
     CHECK(saw_create);
     CHECK(saw_modify);
 
     CHECK(::unlink((dir.value + "/test.txt").c_str()) == 0);
-    events = read_events(ctx, *w);
+    events = read_events(context, *watcher);
     REQUIRE(events.size() >= 1);
     CHECK((events.back().mask & IN_DELETE) != 0);
     CHECK(events.back().name == "test.txt");
 }
 
 TEST_CASE("fs::watcher: IN_IGNORED arrives when the watched dir is removed") {
-    io_context ctx;
+    io_context context;
     temp_dir dir;
-    auto w = fs::watcher::create();
-    REQUIRE(w);
-    REQUIRE(w->add(dir.value, IN_CREATE));
+    auto watcher = fs::watcher::create();
+    REQUIRE(watcher);
+    REQUIRE(watcher->add(dir.value, IN_CREATE));
 
     ::rmdir(dir.value.c_str());
     dir.value.clear();
 
-    auto events = read_events(ctx, *w);
+    auto events = read_events(context, *watcher);
     REQUIRE_FALSE(events.empty());
     CHECK((events.back().mask & IN_IGNORED) != 0);
 }
 
 TEST_CASE("fs::event_range: empty range for a zero-length read") {
-    std::byte buf[16];
-    fs::event_range none{wbytes{buf, sizeof(buf)}, 0};
+    std::byte buffer[16];
+    fs::event_range none{wbytes{buffer, sizeof(buffer)}, 0};
     CHECK(none.empty());
     CHECK(none.size() == 0);
 }

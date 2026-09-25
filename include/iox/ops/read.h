@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/ops/read.h — path choice is
+// iox — ops/read.h: io::read(context, handle, wbytes | registered_buffer).
 #pragma once
 
 #include "iox/core/buffer.h"
@@ -10,61 +9,40 @@ namespace iox::io {
 
 namespace detail {
 
-struct read_policy {
-    struct args_t {
-        wbytes dest{};
-    };
-    using signatures = stdexec::completion_signatures<stdexec::set_value_t(std::size_t),
-                                                stdexec::set_error_t(iox::error), stdexec::set_stopped_t()>;
-    static void prep(io_uring_sqe* sqe, iox::fd f, args_t& a) noexcept {
-        ::io_uring_prep_read(sqe, f.v, a.dest.data(), a.dest.size(), -1);
-    }
-    using complete = transfer_complete;
+struct read_args {
+    wbytes destination{};
+};
+struct read_fixed_args {
+    registered_buffer buffer{};
 };
 
-struct read_fixed_policy {
-    struct args_t {
-        registered_buffer buffer{};
-    };
-    using signatures = stdexec::completion_signatures<stdexec::set_value_t(std::size_t),
-                                                stdexec::set_error_t(iox::error), stdexec::set_stopped_t()>;
-    static void prep(io_uring_sqe* sqe, iox::fd f, args_t& a) noexcept {
-        ::io_uring_prep_read_fixed(sqe, f.v, a.buffer.data, a.buffer.size, -1,
-                                   static_cast<int>(a.buffer.index));
-    }
-    using complete = transfer_complete;
-};
+inline void prep_read(io_uring_sqe* sqe, iox::fd fd, read_args& args) noexcept {
+    ::io_uring_prep_read(sqe, fd.v, args.destination.data(), args.destination.size(), -1);
+}
+inline void prep_read_fixed(io_uring_sqe* sqe, iox::fd fd, read_fixed_args& args) noexcept {
+    ::io_uring_prep_read_fixed(sqe, fd.v, args.buffer.data, args.buffer.size, -1,
+                               static_cast<int>(args.buffer.index));
+}
+
+using read_policy = basic_policy<read_args, prep_read>;
+using read_fixed_policy = basic_policy<read_fixed_args, prep_read_fixed>;
 
 }
 
-inline constexpr struct read_t {
-    template <class H>
-    requires tag_invocable<read_t, io_context&, H, wbytes>
-    auto operator()(io_context& ctx, H&& h, wbytes dest) const
-        noexcept(noexcept(tag_invoke(*this, ctx, std::forward<H>(h), dest)))
-        -> decltype(tag_invoke(*this, ctx, std::forward<H>(h), dest)) {
-        return tag_invoke(*this, ctx, std::forward<H>(h), dest);
-    }
+struct read_tag {};
+using read_t = cpo<read_tag>;
+inline constexpr read_t read{};
 
-    template <class H>
-    requires tag_invocable<read_t, io_context&, H, registered_buffer&>
-    auto operator()(io_context& ctx, H&& h, registered_buffer& buffer) const
-        noexcept(noexcept(tag_invoke(*this, ctx, std::forward<H>(h), buffer)))
-        -> decltype(tag_invoke(*this, ctx, std::forward<H>(h), buffer)) {
-        return tag_invoke(*this, ctx, std::forward<H>(h), buffer);
-    }
-} read{};
-
-template <class H>
-requires std::same_as<std::remove_cvref_t<H>, iox::fd> || readable<std::remove_cvref_t<H>>
-auto tag_invoke(read_t, io_context& ctx, H&& h, wbytes dest) noexcept {
-    return detail::fd_sender<detail::read_policy>{&ctx, detail::reader_fd(h), {dest}};
+template <class Handle>
+requires std::same_as<std::remove_cvref_t<Handle>, iox::fd> || readable<std::remove_cvref_t<Handle>>
+auto tag_invoke(read_t, io_context& context, Handle&& handle, wbytes destination) noexcept {
+    return detail::fd_sender<detail::read_policy>{&context, detail::reader_fd(handle), {destination}};
 }
 
-template <class H>
-requires std::same_as<std::remove_cvref_t<H>, iox::fd> || readable<std::remove_cvref_t<H>>
-auto tag_invoke(read_t, io_context& ctx, H&& h, registered_buffer& buffer) noexcept {
-    return detail::fd_sender<detail::read_fixed_policy>{&ctx, detail::reader_fd(h), {buffer}};
+template <class Handle>
+requires std::same_as<std::remove_cvref_t<Handle>, iox::fd> || readable<std::remove_cvref_t<Handle>>
+auto tag_invoke(read_t, io_context& context, Handle&& handle, registered_buffer& buffer) noexcept {
+    return detail::fd_sender<detail::read_fixed_policy>{&context, detail::reader_fd(handle), {buffer}};
 }
 
 }

@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/nvme/admin.h — raw ADMIN passthru (IDENTIFY, GET_LOG_PAGE, firmware …):
+// iox — nvme/admin.h: raw ADMIN passthru (IDENTIFY, GET_LOG_PAGE, firmware …).
 #pragma once
 
 #include <linux/nvme_ioctl.h>
@@ -8,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "iox/core/cpo.h"
 #include "iox/nvme/device.h"
 #include "iox/ops/fd_sender.h"
 
@@ -30,8 +30,7 @@ struct admin_policy {
         }
         return false;
     }
-    using signatures = stdexec::completion_signatures<stdexec::set_value_t(std::int32_t),
-                                                stdexec::set_error_t(iox::error), stdexec::set_stopped_t()>;
+    using signatures = io::io_signatures<std::int32_t>;
     static void prep(io_uring_sqe* sqe, iox::fd f, args_t& a) noexcept {
         ::io_uring_prep_uring_cmd(sqe, NVME_URING_CMD_ADMIN, f.v);
         std::memcpy(reinterpret_cast<void*>(sqe->cmd), &a.cmd, sizeof(a.cmd));

@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/driver/registry.h — compile-time driver registration (design §六).
+// iox — driver/registry.h: compile-time driver registration (design §六).
 #pragma once
 
 namespace iox::driver {

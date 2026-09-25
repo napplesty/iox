@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/core/error.h — error value type shared by sync (std::expected) and async
+// iox — core/error.h: the error value shared by sync (std::expected) and async (set_error) paths.
 #pragma once
 
 #include <cerrno>
@@ -16,18 +15,17 @@ public:
 
     static error from_negative(int neg_errno) noexcept { return error{-neg_errno}; }
 
-    static error from_errno(int e) noexcept { return error{e}; }
+    static error from_errno(int error_number) noexcept { return error{error_number}; }
 
     int code() const noexcept { return code_; }
     explicit operator bool() const noexcept { return code_ != 0; }
 
-  // Short symbolic name (e.g. "EAGAIN"); "OK" when !*this.
     const char* name() const noexcept;
 
     std::string message() const;
 
-    friend bool operator==(const error& a, const error& b) noexcept { return a.code_ == b.code_; }
-    friend bool operator!=(const error& a, const error& b) noexcept { return !(a == b); }
+    friend bool operator==(const error& lhs, const error& rhs) noexcept { return lhs.code_ == rhs.code_; }
+    friend bool operator!=(const error& lhs, const error& rhs) noexcept { return !(lhs == rhs); }
 
 private:
     explicit error(int code) noexcept : code_(code) {}
@@ -35,7 +33,7 @@ private:
 };
 
 namespace detail {
-const char* errno_name(int e) noexcept;
+const char* errno_name(int error_number) noexcept;
 }
 
 inline const char* error::name() const noexcept {
@@ -46,8 +44,8 @@ inline std::string error::message() const {
     if (code_ == 0) {
         return "success";
     }
-    char buf[256];
-    return std::string{::strerror_r(code_, buf, sizeof(buf))};
+    char buffer[256];
+    return std::string{::strerror_r(code_, buffer, sizeof(buffer))};
 }
 
 }

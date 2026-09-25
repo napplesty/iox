@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/net/dns.h — name resolution over the blocking escape hatch.
+// iox — net/dns.h: name resolution over the blocking escape hatch.
 #pragma once
 
 #include <netdb.h>
@@ -20,20 +19,20 @@ auto resolve(Pool& pool, std::string host, std::string service) {
         hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_STREAM;
 
-        addrinfo* res = nullptr;
-        const int rc = ::getaddrinfo(host.c_str(), service.c_str(), &hints, &res);
-        if (rc != 0) {
-            throw std::system_error{rc, std::generic_category(),
-                                    "getaddrinfo: " + std::string{::gai_strerror(rc)}};
+        addrinfo* result = nullptr;
+        const int status = ::getaddrinfo(host.c_str(), service.c_str(), &hints, &result);
+        if (status != 0) {
+            throw std::system_error{status, std::generic_category(),
+                                    "getaddrinfo: " + std::string{::gai_strerror(status)}};
         }
-        std::vector<endpoint> out;
-        for (addrinfo* ai = res; ai != nullptr; ai = ai->ai_next) {
-            if (auto ep = endpoint::from_native(ai->ai_addr, ai->ai_addrlen)) {
-                out.push_back(std::move(*ep));
+        std::vector<endpoint> endpoints;
+        for (addrinfo* entry = result; entry != nullptr; entry = entry->ai_next) {
+            if (auto address = endpoint::from_native(entry->ai_addr, entry->ai_addrlen)) {
+                endpoints.push_back(std::move(*address));
             }
         }
-        ::freeaddrinfo(res);
-        return out;
+        ::freeaddrinfo(result);
+        return endpoints;
     });
 }
 

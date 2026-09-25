@@ -42,54 +42,54 @@ std::uint16_t listen_on_ephemeral(int& fd_out) {
     const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     int one = 1;
     (void)::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    sockaddr_in sin{};
-    sin.sin_family = AF_INET;
-    sin.sin_addr.s_addr = htonl(INADDR_ANY);
-    sin.sin_port = 0;
-    if (::bind(fd, reinterpret_cast<const sockaddr*>(&sin), sizeof(sin)) != 0 ||
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_port = 0;
+    if (::bind(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0 ||
         ::listen(fd, 64) != 0) {
         ::close(fd);
         fd_out = -1;
         return 0;
     }
-    socklen_t len = sizeof(sin);
-    (void)::getsockname(fd, reinterpret_cast<sockaddr*>(&sin), &len);
+    socklen_t length = sizeof(address);
+    (void)::getsockname(fd, reinterpret_cast<sockaddr*>(&address), &length);
     fd_out = fd;
-    return ntohs(sin.sin_port);
+    return ntohs(address.sin_port);
 }
 
 int connect_one(std::uint16_t port) {
     const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-    sockaddr_in sin{};
-    sin.sin_family = AF_INET;
-    sin.sin_addr.s_addr = htonl(0x7f000001);
-    sin.sin_port = htons(port);
-    if (::connect(fd, reinterpret_cast<const sockaddr*>(&sin), sizeof(sin)) != 0) {
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(0x7f000001);
+    address.sin_port = htons(port);
+    if (::connect(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0) {
         if (errno != EINPROGRESS) {
             ::close(fd);
             return -1;
         }
-        pollfd p{fd, POLLOUT, 0};
-        (void)::poll(&p, 1, 2000);
+        pollfd poll_fd{fd, POLLOUT, 0};
+        (void)::poll(&poll_fd, 1, 2000);
     }
     return fd;
 }
 
 struct samples {
-    std::vector<double> ns;
-    void add(clock_t_::duration d) {
-        if (ns.size() < 200000) {
-            ns.push_back(std::chrono::duration<double, std::nano>(d).count());
+    std::vector<double> nanoseconds;
+    void add(clock_t_::duration duration) {
+        if (nanoseconds.size() < 200000) {
+            nanoseconds.push_back(std::chrono::duration<double, std::nano>(duration).count());
         }
     }
-    void finalize(result& r) {
-        if (ns.empty()) {
+    void finalize(result& out) {
+        if (nanoseconds.empty()) {
             return;
         }
-        std::sort(ns.begin(), ns.end());
-        r.round_trips = ns.size();
-        r.p50_ns = ns[ns.size() / 2];
-        r.p99_ns = ns[(ns.size() * 99) / 100];
+        std::sort(nanoseconds.begin(), nanoseconds.end());
+        out.round_trips = nanoseconds.size();
+        out.p50_ns = nanoseconds[nanoseconds.size() / 2];
+        out.p99_ns = nanoseconds[(nanoseconds.size() * 99) / 100];
     }
 };
 
@@ -102,96 +102,96 @@ result run_iox(int seconds) {
                      acceptor.error().message().c_str());
         return {};
     }
-    sockaddr_in sin{};
-    socklen_t slen = sizeof(sin);
-    ::getsockname(acceptor->accept_handle().v, reinterpret_cast<sockaddr*>(&sin), &slen);
-    const auto port = ntohs(sin.sin_port);
+    sockaddr_in address{};
+    socklen_t address_length = sizeof(address);
+    ::getsockname(acceptor->accept_handle().v, reinterpret_cast<sockaddr*>(&address), &address_length);
+    const auto port = ntohs(address.sin_port);
     std::atomic<int> live_sessions{0};
     const auto server_start = clock_t_::now();
     std::thread server([&] {
-        io_context ctx;
+        io_context context;
         struct session {
-            net::tcp::socket sock;
-            std::unique_ptr<std::byte[]> buf = std::make_unique<std::byte[]>(kPayload);
+            net::tcp::socket socket;
+            std::unique_ptr<std::byte[]> buffer = std::make_unique<std::byte[]>(kPayload);
         };
-        auto serve_one = [&](net::tcp::socket s) {
-            auto* sn = new session{std::move(s)};
+        auto serve_one = [&](net::tcp::socket sock) {
+            auto* session_ptr = new session{std::move(sock)};
             live_sessions.fetch_add(1);
-            ex::detach(io::loop(ctx, [sn, &ctx, eof = false]() mutable {
-                            return io::read(ctx, sn->sock,
-                                            wbytes{sn->buf.get(), kPayload})
-                                 | ex::let_value([sn, &ctx, &eof](std::size_t n) {
-                                       eof = (n == 0);
+            ex::detach(io::loop(context, [session_ptr, &context, eof = false]() mutable {
+                            return io::read(context, session_ptr->socket,
+                                            wbytes{session_ptr->buffer.get(), kPayload})
+                                 | ex::let_value([session_ptr, &context, &eof](std::size_t count) {
+                                       eof = (count == 0);
                                        return io::write_all(
-                                           ctx, sn->sock,
-                                           rbytes{sn->buf.get(), n});
+                                           context, session_ptr->socket,
+                                           rbytes{session_ptr->buffer.get(), count});
                                    })
                                  | ex::then([&eof] { return eof; });
                         })
                         | ex::upon_error([](auto&&) {})
-                        | ex::then([sn, &live_sessions] {
-                              delete sn;
+                        | ex::then([session_ptr, &live_sessions] {
+                              delete session_ptr;
                               live_sessions.fetch_sub(1);
                           }));
         };
         std::atomic<uint64_t> accepts{0};
-        ex::detach(io::loop(ctx, [&] {
-            return io::accept(ctx, *acceptor)
-                 | ex::then([&](net::tcp::socket sk) {
+        ex::detach(io::loop(context, [&] {
+            return io::accept(context, *acceptor)
+                 | ex::then([&](net::tcp::socket socket) {
                        accepts.fetch_add(1);
-                       serve_one(std::move(sk));
+                       serve_one(std::move(socket));
                        return false;
                    });
         }));
         while ((!stop.load(std::memory_order_relaxed) || live_sessions.load() > 0)
                && clock_t_::now() < server_start + std::chrono::seconds(seconds)
                     + std::chrono::seconds(5)) {
-            ctx.run_for(std::chrono::milliseconds(50));
+            context.run_for(std::chrono::milliseconds(50));
         }
     });
 
-    result r;
+    result out;
     std::thread client([&] {
-        io_context ctx;
-        samples s;
+        io_context context;
+        samples latency_samples;
         std::atomic<int> finished{0};
-        std::atomic<uint64_t> iters{0};
+        std::atomic<uint64_t> iterations{0};
 
         struct slot {
-            net::tcp::socket sock;
-            std::unique_ptr<std::byte[]> buf = std::make_unique<std::byte[]>(kPayload);
-            clock_t_::time_point t0;
-            explicit slot(net::tcp::socket s) : sock(std::move(s)) {}
+            net::tcp::socket socket;
+            std::unique_ptr<std::byte[]> buffer = std::make_unique<std::byte[]>(kPayload);
+            clock_t_::time_point start_time;
+            explicit slot(net::tcp::socket sock) : socket(std::move(sock)) {}
         };
         auto slots = std::make_unique<std::unique_ptr<slot>[]>(kConns * kInflight);
-        for (int i = 0; i < kConns * kInflight; ++i) {
-            auto sock = net::tcp::socket::unconnected(net::endpoint::family::ipv4);
-            if (!sock) {
+        for (int index = 0; index < kConns * kInflight; ++index) {
+            auto socket = net::tcp::socket::unconnected(net::endpoint::family::ipv4);
+            if (!socket) {
                 return;
             }
-            auto conn = ex::sync_wait(
-                ctx, io::connect(ctx, *sock,
-                                 *net::endpoint::ipv4("127.0.0.1", port)));
-            if (!conn) {
+            auto connect_result = ex::sync_wait(
+                context, io::connect(context, *socket,
+                                     *net::endpoint::ipv4("127.0.0.1", port)));
+            if (!connect_result) {
                 return;
             }
-            slots[i] = std::make_unique<slot>(std::move(*sock));
+            slots[index] = std::make_unique<slot>(std::move(*socket));
         }
 
-        for (int i = 0; i < kConns * kInflight; ++i) {
-            slot* st = slots[i].get();
+        for (int index = 0; index < kConns * kInflight; ++index) {
+            slot* slot_ptr = slots[index].get();
             ex::detach(
-                io::loop(ctx, [st, &s, &stop, &ctx, &iters] {
-                    st->t0 = clock_t_::now();
-                    return io::write_all(ctx, st->sock, rbytes{st->buf.get(), kPayload})
-                         | ex::let_value([st, &ctx] {
-                               return io::read(ctx, st->sock,
-                                               wbytes{st->buf.get(), kPayload});
+                io::loop(context, [slot_ptr, &latency_samples, &stop, &context, &iterations] {
+                    slot_ptr->start_time = clock_t_::now();
+                    return io::write_all(context, slot_ptr->socket, rbytes{slot_ptr->buffer.get(), kPayload})
+                         | ex::let_value([slot_ptr, &context] {
+                               return io::read(context, slot_ptr->socket,
+                                               wbytes{slot_ptr->buffer.get(), kPayload});
                            })
-                         | ex::then([st, &s, &stop, &iters](std::size_t n) {
-                               ++iters;
-                               if (n == kPayload) {
-                                   s.add(clock_t_::now() - st->t0);
+                         | ex::then([slot_ptr, &latency_samples, &stop, &iterations](std::size_t count) {
+                               ++iterations;
+                               if (count == kPayload) {
+                                   latency_samples.add(clock_t_::now() - slot_ptr->start_time);
                                }
                                return stop.load(std::memory_order_relaxed);
                            });
@@ -202,34 +202,34 @@ result run_iox(int seconds) {
 
         const auto deadline = clock_t_::now() + std::chrono::seconds(seconds);
         while (clock_t_::now() < deadline) {
-            ctx.run_for(std::chrono::milliseconds(20));
+            context.run_for(std::chrono::milliseconds(20));
         }
         stop.store(true);
         const auto drain_deadline = clock_t_::now() + std::chrono::seconds(5);
         while (finished.load() < kConns * kInflight
                && clock_t_::now() < drain_deadline) {
-            ctx.run_for(std::chrono::milliseconds(20));
+            context.run_for(std::chrono::milliseconds(20));
         }
-        s.finalize(r);
+        latency_samples.finalize(out);
     });
 
     client.join();
     stop.store(true);
     server.join();
-    return r;
+    return out;
 }
 
 struct raw_conn {
     int fd = -1;
     bool awaiting_send = false;
-    std::byte buf[kPayload];
+    std::byte buffer[kPayload];
 };
 
 struct raw_ping {
     int fd = -1;
     bool want_read = false;
-    clock_t_::time_point t0;
-    std::byte buf[kPayload];
+    clock_t_::time_point start_time;
+    std::byte buffer[kPayload];
 };
 
 struct raw_ctx {
@@ -237,14 +237,14 @@ struct raw_ctx {
     std::vector<raw_conn> connections;
 };
 
-void raw_submit_echo(uring::ring& ring, raw_conn& c) {
+void raw_submit_echo(uring::ring& ring, raw_conn& connection) {
     io_uring_sqe* sqe = ring.next_sqe();
     if (sqe == nullptr) {
         ring.flush();
         sqe = ring.next_sqe();
     }
-    ::io_uring_prep_recv(sqe, c.fd, c.buf, kPayload, 0);
-    ::io_uring_sqe_set_data(sqe, &c);
+    ::io_uring_prep_recv(sqe, connection.fd, connection.buffer, kPayload, 0);
+    ::io_uring_sqe_set_data(sqe, &connection);
 }
 
 result run_raw(int seconds) {
@@ -263,100 +263,100 @@ result run_raw(int seconds) {
         std::vector<raw_conn> connections;
         connections.reserve(64);
 
-        auto arm_accept = [&](int i) {
+        auto arm_accept = [&](int index) {
             io_uring_sqe* sqe = ring.next_sqe();
             if (sqe == nullptr) {
                 ring.flush();
                 sqe = ring.next_sqe();
             }
             ::io_uring_prep_accept(sqe, listen_fd, nullptr, nullptr, SOCK_CLOEXEC);
-            ::io_uring_sqe_set_data(sqe, &accepts[i]);
+            ::io_uring_sqe_set_data(sqe, &accepts[index]);
         };
-        for (int i = 0; i < 8; ++i) {
-            arm_accept(i);
+        for (int index = 0; index < 8; ++index) {
+            arm_accept(index);
         }
 
         while (!stop.load(std::memory_order_relaxed)) {
             ring.flush_and_wait(1);
             ring.for_each_cqe([&](io_uring_cqe* cqe) {
-                void* ud = io_uring_cqe_get_data(cqe);
-                if (ud >= accepts.data() && ud < accepts.data() + accepts.size()) {
+                void* user_data = io_uring_cqe_get_data(cqe);
+                if (user_data >= accepts.data() && user_data < accepts.data() + accepts.size()) {
                     if (cqe->res >= 0) {
                         connections.push_back(raw_conn{cqe->res, false, {}});
                         raw_submit_echo(ring, connections.back());
                         arm_accept(static_cast<int>(
-                            static_cast<accept_slot*>(ud) - accepts.data()));
+                            static_cast<accept_slot*>(user_data) - accepts.data()));
                     }
-                } else if (auto* c = static_cast<raw_conn*>(ud); c != nullptr) {
+                } else if (auto* connection = static_cast<raw_conn*>(user_data); connection != nullptr) {
                     io_uring_sqe* sqe = ring.next_sqe();
                     if (sqe == nullptr) {
                         ring.flush();
                         sqe = ring.next_sqe();
                     }
-                    if (c->awaiting_send) {
-                        ::io_uring_prep_recv(sqe, c->fd, c->buf, kPayload, 0);
-                        ::io_uring_sqe_set_data(sqe, c);
-                        c->awaiting_send = false;
+                    if (connection->awaiting_send) {
+                        ::io_uring_prep_recv(sqe, connection->fd, connection->buffer, kPayload, 0);
+                        ::io_uring_sqe_set_data(sqe, connection);
+                        connection->awaiting_send = false;
                     } else {
-                        ::io_uring_prep_send(sqe, c->fd, c->buf,
+                        ::io_uring_prep_send(sqe, connection->fd, connection->buffer,
                                              static_cast<std::size_t>(cqe->res),
                                              MSG_NOSIGNAL);
-                        ::io_uring_sqe_set_data(sqe, c);
-                        c->awaiting_send = true;
+                        ::io_uring_sqe_set_data(sqe, connection);
+                        connection->awaiting_send = true;
                     }
                 }
             });
         }
-        for (auto& c : connections) {
-            ::close(c.fd);
+        for (auto& connection : connections) {
+            ::close(connection.fd);
         }
     });
 
-    result r;
+    result out;
     std::thread client([&] {
         uring::ring ring{uring::ring_params{.entries = 256}};
-        samples s;
+        samples latency_samples;
         std::vector<raw_ping> pings(kConns * kInflight);
         std::atomic<int> finished{0};
-        std::atomic<uint64_t> iters{0};
+        std::atomic<uint64_t> iterations{0};
 
-        for (auto& p : pings) {
-            p.fd = connect_one(port);
-            p.want_read = false;
+        for (auto& ping : pings) {
+            ping.fd = connect_one(port);
+            ping.want_read = false;
             io_uring_sqe* sqe = ring.next_sqe();
             if (sqe == nullptr) {
                 ring.flush();
                 sqe = ring.next_sqe();
             }
-            ::memset(p.buf, 'x', kPayload);
-            p.t0 = clock_t_::now();
-            ::io_uring_prep_send(sqe, p.fd, p.buf, kPayload, MSG_NOSIGNAL);
-            ::io_uring_sqe_set_data(sqe, &p);
-            p.want_read = true;
+            ::memset(ping.buffer, 'x', kPayload);
+            ping.start_time = clock_t_::now();
+            ::io_uring_prep_send(sqe, ping.fd, ping.buffer, kPayload, MSG_NOSIGNAL);
+            ::io_uring_sqe_set_data(sqe, &ping);
+            ping.want_read = true;
         }
 
         while (finished.load() < kConns * kInflight) {
             ring.flush_and_wait(1);
             ring.for_each_cqe([&](io_uring_cqe* cqe) {
-                auto* p = static_cast<raw_ping*>(io_uring_cqe_get_data(cqe));
-                if (p == nullptr || p->fd < 0) {
+                auto* ping = static_cast<raw_ping*>(io_uring_cqe_get_data(cqe));
+                if (ping == nullptr || ping->fd < 0) {
                     return;
                 }
-                if (p->want_read) {
+                if (ping->want_read) {
                     io_uring_sqe* sqe = ring.next_sqe();
                     if (sqe == nullptr) {
                         ring.flush();
                         sqe = ring.next_sqe();
                     }
-                    ::io_uring_prep_recv(sqe, p->fd, p->buf, kPayload, 0);
-                    ::io_uring_sqe_set_data(sqe, p);
-                    p->want_read = false;
+                    ::io_uring_prep_recv(sqe, ping->fd, ping->buffer, kPayload, 0);
+                    ::io_uring_sqe_set_data(sqe, ping);
+                    ping->want_read = false;
                 } else {
                     if (cqe->res == static_cast<std::int32_t>(kPayload)) {
-                        s.add(clock_t_::now() - p->t0);
+                        latency_samples.add(clock_t_::now() - ping->start_time);
                     }
                     if (stop.load(std::memory_order_relaxed)) {
-                        p->fd = -1;
+                        ping->fd = -1;
                         finished.fetch_add(1);
                         return;
                     }
@@ -365,14 +365,14 @@ result run_raw(int seconds) {
                         ring.flush();
                         sqe = ring.next_sqe();
                     }
-                    p->t0 = clock_t_::now();
-                    ::io_uring_prep_send(sqe, p->fd, p->buf, kPayload, MSG_NOSIGNAL);
-                    ::io_uring_sqe_set_data(sqe, p);
-                    p->want_read = true;
+                    ping->start_time = clock_t_::now();
+                    ::io_uring_prep_send(sqe, ping->fd, ping->buffer, kPayload, MSG_NOSIGNAL);
+                    ::io_uring_sqe_set_data(sqe, ping);
+                    ping->want_read = true;
                 }
             });
         }
-        s.finalize(r);
+        latency_samples.finalize(out);
     });
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -384,7 +384,7 @@ result run_raw(int seconds) {
     client.join();
     server.join();
     ::close(listen_fd);
-    return r;
+    return out;
 }
 
 }
@@ -394,20 +394,20 @@ int main(int argc, char** argv) {
     std::printf("TCP echo, %d connections × %d in-flight × %zu B, %ds windows\n", kConns,
                 kInflight, kPayload, seconds);
 
-    const result iox_r = run_iox(seconds);
-    const result raw_r = run_raw(seconds);
+    const result iox_result = run_iox(seconds);
+    const result raw_result = run_raw(seconds);
 
-    auto line = [](const char* who, const result& r) {
-        std::printf("  %-5s: %8.0f kpps   p50 %7.1f us   p99 %7.1f us\n", who,
-                    static_cast<double>(r.round_trips) / 1e3,
-                    r.p50_ns / 1000.0, r.p99_ns / 1000.0);
+    auto line = [](const char* name, const result& result) {
+        std::printf("  %-5s: %8.0f kpps   p50 %7.1f us   p99 %7.1f us\n", name,
+                    static_cast<double>(result.round_trips) / 1e3,
+                    result.p50_ns / 1000.0, result.p99_ns / 1000.0);
     };
-    line("iox", iox_r);
-    line("raw", raw_r);
-    if (raw_r.round_trips != 0) {
+    line("iox", iox_result);
+    line("raw", raw_result);
+    if (raw_result.round_trips != 0) {
         std::printf("  ratio : %.0f %% of raw round-trips\n",
-                    100.0 * static_cast<double>(iox_r.round_trips) /
-                        static_cast<double>(raw_r.round_trips));
+                    100.0 * static_cast<double>(iox_result.round_trips) /
+                        static_cast<double>(raw_result.round_trips));
     }
     return 0;
 }

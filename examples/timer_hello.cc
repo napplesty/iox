@@ -9,22 +9,22 @@
 using namespace std::chrono_literals;
 
 int main() {
-    iox::io_context ctx;
+    iox::io_context context;
 
-    auto flow = iox::io::sleep_for(ctx, 100ms)
+    auto flow = iox::io::sleep_for(context, 100ms)
               | iox::exec::let_value([&] {
                     std::puts("tick 1 (t=100ms)");
-                    return iox::io::sleep_for(ctx, 100ms);
+                    return iox::io::sleep_for(context, 100ms);
                 })
               | iox::exec::let_value([&] {
                     std::puts("tick 2 (t=200ms)");
-                    return iox::io::schedule(ctx);
+                    return iox::io::schedule(context);
                 })
               | iox::exec::then([&] {
                     std::puts("done");
-                    ctx.stop();
+                    context.stop();
                 });
 
-    auto r = iox::exec::sync_wait(ctx, flow);
-    return r ? 0 : 1;
+    auto result = iox::exec::sync_wait(context, flow);
+    return result ? 0 : 1;
 }

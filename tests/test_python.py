@@ -57,6 +57,28 @@ def test_open_missing():
         expect(e.errno == 2, f"ENOENT expected, got {e.errno}")
 
 
+def test_gather_and_into():
+    ctx = iox.Context()
+    path = os.path.join(tempfile.mkdtemp(), "iox_py_many.bin")
+    f = iox.open_file(ctx, path, iox.Mode.rw | iox.Mode.create | iox.Mode.truncate)
+    payload = os.urandom(64 * 1024)
+    f.write_at(payload, 0)
+
+    parts = f.read_at_many([(128, 0), (256, 4096), (64, len(payload) - 64)])
+    expect(len(parts) == 3, "read_at_many must return one entry per spec")
+    expect(parts[0] == payload[:128]
+           and parts[1] == payload[4096:4096 + 256]
+           and parts[2] == payload[-64:],
+           "read_at_many must gather exact slices")
+
+    buf = bytearray(512)
+    n = f.read_into(buf)
+    expect(n == 512 and bytes(buf) == payload[:512],
+           "read_into must fill the caller buffer from the current offset")
+    f.close()
+    os.unlink(path)
+
+
 def test_sleep():
     ctx = iox.Context()
     t0 = time.monotonic()
@@ -88,6 +110,12 @@ def test_tcp_echo():
 
     client.sendall(b"pong")
     expect(conn.recv(4096) == b"pong", "recv must read peer bytes")
+
+    client.sendall(b"into-buffer")
+    view = bytearray(64)
+    n = conn.recv_into(view)
+    expect(bytes(view[:n]) == b"into-buffer", "recv_into must fill the caller buffer")
+
     conn.close()
     expect(not conn.valid(), "closed socket must be invalid")
     client.close()
@@ -96,6 +124,7 @@ def test_tcp_echo():
 def main():
     test_file_roundtrip()
     test_open_missing()
+    test_gather_and_into()
     test_sleep()
     test_tcp_echo()
     print("python bindings: all tests passed")

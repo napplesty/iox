@@ -1,5 +1,4 @@
-// iox — unified async IO for Linux
-// include/iox/net/unix.h — Unix domain stream sockets.
+// iox — net/unix.h: Unix domain stream sockets.
 #pragma once
 
 #include <sys/socket.h>
@@ -7,11 +6,13 @@
 #include <unistd.h>
 
 #include <expected>
+#include <type_traits>
 #include <utility>
 
 #include "iox/core/concepts.h"
 #include "iox/core/error.h"
 #include "iox/core/fd.h"
+#include "iox/net/detail.h"
 #include "iox/net/endpoint.h"
 
 namespace iox::net::unix_dom {
@@ -22,56 +23,37 @@ class acceptor {
 public:
     using socket_type = socket;
 
-    static std::expected<acceptor, error> listen(const endpoint& ep, int backlog = 128) noexcept {
-        if (ep.family() != endpoint::family::unix_path) {
+    static std::expected<acceptor, error> listen(const endpoint& local, int backlog = 128) noexcept {
+        if (local.family() != endpoint::family::unix_path) {
             return std::unexpected(error::from_errno(EINVAL));
         }
-        if (ep.data()->sa_family == AF_UNIX &&
-            reinterpret_cast<const sockaddr_un*>(ep.data())->sun_path[0] != '\0') {
-            ::unlink(reinterpret_cast<const sockaddr_un*>(ep.data())->sun_path);
+        if (local.data()->sa_family == AF_UNIX &&
+            reinterpret_cast<const sockaddr_un*>(local.data())->sun_path[0] != '\0') {
+            ::unlink(reinterpret_cast<const sockaddr_un*>(local.data())->sun_path);
         }
-        const int raw = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-        if (raw < 0) {
-            return std::unexpected(error::from_errno(errno));
+        auto socket_fd = detail::make_socket(AF_UNIX, SOCK_STREAM);
+        if (!socket_fd) {
+            return std::unexpected(socket_fd.error());
         }
-        if (::bind(raw, ep.data(), ep.size()) != 0 || ::listen(raw, backlog) != 0) {
-            const int e = errno;
-            ::close(raw);
-            return std::unexpected(error::from_errno(e));
+        auto bound = detail::bind_listen(std::move(*socket_fd), local, backlog);
+        if (!bound) {
+            return std::unexpected(bound.error());
         }
-        return acceptor{raw};
+        return acceptor{std::move(*bound)};
     }
 
     acceptor() noexcept = default;
-    ~acceptor() { reset(); }
-    acceptor(acceptor&& other) noexcept : fd_(std::exchange(other.fd_, iox::fd{})) {}
-    acceptor& operator=(acceptor&& other) noexcept {
-        if (this != &other) {
-            reset();
-            fd_ = std::exchange(other.fd_, iox::fd{});
-        }
-        return *this;
-    }
-    acceptor(const acceptor&) = delete;
-    acceptor& operator=(const acceptor&) = delete;
-
     bool valid() const noexcept { return fd_.valid(); }
 
-    iox::fd accept_handle() const noexcept { return fd_; }
+    iox::fd accept_handle() const noexcept { return fd_.get(); }
     static constexpr bool message_based = true;
-
-    iox::fd* fd_slot() noexcept { return &fd_; }
-
-    void reset() noexcept {
-        if (fd_.valid()) {
-            ::close(fd_.v);
-            fd_ = iox::fd{};
-        }
-    }
+    iox::fd* fd_slot() noexcept { return fd_.slot(); }
+    void reset() noexcept { fd_.reset(); }
 
 private:
-    explicit acceptor(int raw) noexcept : fd_(raw) {}
-    iox::fd fd_{};
+    explicit acceptor(iox::unique_fd fd) noexcept : fd_(std::move(fd)) {}
+
+    iox::unique_fd fd_{};
 };
 
 class socket {
@@ -79,46 +61,28 @@ public:
     struct adopt_fd_t {};
 
     static std::expected<socket, error> unconnected() noexcept {
-        const int raw = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-        if (raw < 0) {
-            return std::unexpected(error::from_errno(errno));
+        auto socket_fd = detail::make_socket(AF_UNIX, SOCK_STREAM);
+        if (!socket_fd) {
+            return std::unexpected(socket_fd.error());
         }
-        return socket{adopt_fd_t{}, raw};
+        return socket{adopt_fd_t{}, socket_fd->release().v};
     }
 
     socket() noexcept = default;
-    ~socket() { reset(); }
-    socket(socket&& other) noexcept : fd_(std::exchange(other.fd_, iox::fd{})) {}
-    socket& operator=(socket&& other) noexcept {
-        if (this != &other) {
-            reset();
-            fd_ = std::exchange(other.fd_, iox::fd{});
-        }
-        return *this;
-    }
-    socket(const socket&) = delete;
-    socket& operator=(const socket&) = delete;
+    socket(adopt_fd_t, int raw_fd) noexcept : fd_(raw_fd) {}
 
     bool valid() const noexcept { return fd_.valid(); }
 
-    socket(adopt_fd_t, int raw) noexcept : fd_(raw) {}
-
-    iox::fd read_handle() const noexcept { return fd_; }
-    iox::fd write_handle() const noexcept { return fd_; }
-    iox::fd connect_handle() const noexcept { return fd_; }
+    iox::fd read_handle() const noexcept { return fd_.get(); }
+    iox::fd write_handle() const noexcept { return fd_.get(); }
+    iox::fd connect_handle() const noexcept { return fd_.get(); }
     static constexpr bool message_based = true;
+    iox::fd* fd_slot() noexcept { return fd_.slot(); }
 
-    iox::fd* fd_slot() noexcept { return &fd_; }
-
-    void reset() noexcept {
-        if (fd_.valid()) {
-            ::close(fd_.v);
-            fd_ = iox::fd{};
-        }
-    }
+    void reset() noexcept { fd_.reset(); }
 
 private:
-    iox::fd fd_{};
+    iox::unique_fd fd_{};
 };
 
 struct pair {
@@ -135,5 +99,9 @@ struct pair {
 };
 
 static_assert(io::readable<socket> && io::writable<socket> && !io::seekable<socket>);
+static_assert(std::is_nothrow_move_constructible_v<acceptor> &&
+              !std::is_copy_constructible_v<acceptor>);
+static_assert(std::is_nothrow_move_constructible_v<socket> &&
+              !std::is_copy_constructible_v<socket>);
 
 }

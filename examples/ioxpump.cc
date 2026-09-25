@@ -43,57 +43,57 @@ parsed split_uri(std::string_view uri) {
             .rest = std::string{uri.substr(colon + 3)}};
 }
 
-std::expected<channel, error> open_channel(io_context& ctx, std::string_view uri,
+std::expected<channel, error> open_channel(io_context& context, std::string_view uri,
                                            bool for_sink) {
-    const auto p = split_uri(uri);
-    if (p.scheme == "file" || p.scheme.empty()) {
-        const auto m = for_sink ? (fs::mode::rw | fs::mode::create | fs::mode::truncate)
-                                : fs::mode::read;
-        auto f = fs::file::open(p.rest.c_str(), m);
-        if (!f) {
-            return std::unexpected(f.error());
+    const auto parts = split_uri(uri);
+    if (parts.scheme == "file" || parts.scheme.empty()) {
+        const auto mode = for_sink ? (fs::mode::rw | fs::mode::create | fs::mode::truncate)
+                                   : fs::mode::read;
+        auto file = fs::file::open(parts.rest.c_str(), mode);
+        if (!file) {
+            return std::unexpected(file.error());
         }
-        return channel{std::move(*f)};
+        return channel{std::move(*file)};
     }
-    if (p.scheme != "tcp") {
+    if (parts.scheme != "tcp") {
         return std::unexpected(error::from_errno(EINVAL));
     }
-    auto ep = net::endpoint::parse(p.rest);
-    if (!ep) {
-        return std::unexpected(ep.error());
+    auto endpoint = net::endpoint::parse(parts.rest);
+    if (!endpoint) {
+        return std::unexpected(endpoint.error());
     }
-    if (p.rest.starts_with("0.0.0.0:") || p.rest.starts_with("[::]:")) {
-        auto acceptor = net::tcp::acceptor::listen(*ep);
+    if (parts.rest.starts_with("0.0.0.0:") || parts.rest.starts_with("[::]:")) {
+        auto acceptor = net::tcp::acceptor::listen(*endpoint);
         if (!acceptor) {
             return std::unexpected(acceptor.error());
         }
-        auto got = ex::sync_wait(ctx, io::accept(ctx, *acceptor));
-        if (!got) {
-            return std::unexpected(got.error ? *got.error : error::from_errno(EIO));
+        auto accepted = ex::sync_wait(context, io::accept(context, *acceptor));
+        if (!accepted) {
+            return std::unexpected(accepted.error ? *accepted.error : error::from_errno(EIO));
         }
-        return channel{std::move(std::get<0>(*got))};
+        return channel{std::move(std::get<0>(*accepted))};
     }
-    auto sock = net::tcp::socket::unconnected(ep->family());
-    if (!sock) {
-        return std::unexpected(sock.error());
+    auto socket = net::tcp::socket::unconnected(endpoint->family());
+    if (!socket) {
+        return std::unexpected(socket.error());
     }
-    auto conn = ex::sync_wait(ctx, io::connect(ctx, *sock, *ep));
-    if (!conn) {
-        return std::unexpected(conn.error ? *conn.error : error::from_errno(EIO));
+    auto connect_result = ex::sync_wait(context, io::connect(context, *socket, *endpoint));
+    if (!connect_result) {
+        return std::unexpected(connect_result.error ? *connect_result.error : error::from_errno(EIO));
     }
-    return channel{std::move(*sock)};
+    return channel{std::move(*socket)};
 }
 
-auto userspace_pump(io_context& ctx, channel& source, channel& dest, std::byte* buffer,
+auto userspace_pump(io_context& context, channel& source, channel& dest, std::byte* buffer,
                     std::size_t chunk, std::uint64_t& moved, bool& eof) {
-    return io::loop(ctx, [&ctx, &source, &dest, buffer, chunk, &moved, &eof]() {
-        return std::visit([&](auto& h) { return io::read(ctx, h, wbytes{buffer, chunk}); }, source)
-             | ex::let_value([&buffer, &moved, &eof, &ctx, &dest](std::size_t n) {
-                   eof = (n == 0);
+    return io::loop(context, [&context, &source, &dest, buffer, chunk, &moved, &eof]() {
+        return std::visit([&](auto& handle) { return io::read(context, handle, wbytes{buffer, chunk}); }, source)
+             | ex::let_value([&buffer, &moved, &eof, &context, &dest](std::size_t count) {
+                   eof = (count == 0);
                    return std::visit(
-                              [&](auto& h) { return io::write_all(ctx, h, rbytes{buffer, n}); },
+                              [&](auto& handle) { return io::write_all(context, handle, rbytes{buffer, count}); },
                               dest)
-                        | ex::then([&moved, n]() { moved += n; });
+                        | ex::then([&moved, count]() { moved += count; });
                })
              | ex::then([&eof]() { return eof; });
     });
@@ -112,77 +112,77 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    io_context ctx;
+    io_context context;
 
     signal::set signals{SIGINT, SIGTERM};
     auto watcher = signal::watcher::create(signals);
-    ex::inplace_stop_source stop_src;
+    ex::inplace_stop_source stop_source;
     bool pump_done = false;
     if (watcher) {
-        ex::detach(io::loop(ctx, [&]() {
-            return io::signal(ctx, *watcher)
-                 | ex::then([&](::signalfd_siginfo si) {
+        ex::detach(io::loop(context, [&]() {
+            return io::signal(context, *watcher)
+                 | ex::then([&](::signalfd_siginfo signal_info) {
                         if (!pump_done) {
                             std::fprintf(stderr, "ioxpump: signal %u, draining...\n",
-                                         si.ssi_signo);
+                                         signal_info.ssi_signo);
                         }
-                        stop_src.request_stop();
+                        stop_source.request_stop();
                         return true;
                     });
         }));
     }
 
-    auto source = open_channel(ctx, argv[1], false);
+    auto source = open_channel(context, argv[1], false);
     if (!source) {
         std::fprintf(stderr, "open %s: %s\n", argv[1], source.error().message().c_str());
         return 1;
     }
-    auto dest = open_channel(ctx, argv[2], true);
+    auto dest = open_channel(context, argv[2], true);
     if (!dest) {
         std::fprintf(stderr, "open %s: %s\n", argv[2], dest.error().message().c_str());
         return 1;
     }
 
-    const iox::fd in = std::visit([](auto& h) { return io::detail::reader_fd(h); }, *source);
-    const iox::fd out = std::visit([](auto& h) { return io::detail::writer_fd(h); }, *dest);
+    const iox::fd input_fd = std::visit([](auto& handle) { return io::detail::reader_fd(handle); }, *source);
+    const iox::fd output_fd = std::visit([](auto& handle) { return io::detail::writer_fd(handle); }, *dest);
 
     std::uint64_t moved = 0;
-    const auto t0 = std::chrono::steady_clock::now();
+    const auto start_time = std::chrono::steady_clock::now();
 
-    auto r = ex::sync_wait(ctx, stop_src, io::pump(ctx, in, out, 256 * 1024, &moved));
-    bool interrupted = r.stopped;
+    auto result = ex::sync_wait(context, stop_source, io::pump(context, input_fd, output_fd, 256 * 1024, &moved));
+    bool interrupted = result.stopped;
 
-    if (!r && r.error && moved == 0 && io::detail::splice_unsupported(r.error->code())) {
+    if (!result && result.error && moved == 0 && io::detail::splice_unsupported(result.error->code())) {
         const auto chunk = 256 * 1024;
         const auto buffer = std::make_unique_for_overwrite<std::byte[]>(chunk);
         bool eof = false;
-        auto r2 = ex::sync_wait(ctx, stop_src,
-                                userspace_pump(ctx, *source, *dest, buffer.get(), chunk, moved, eof));
-        r = r2;
-        interrupted = r2.stopped;
+        auto fallback_result = ex::sync_wait(context, stop_source,
+                                             userspace_pump(context, *source, *dest, buffer.get(), chunk, moved, eof));
+        result = fallback_result;
+        interrupted = fallback_result.stopped;
     }
 
-    const auto secs =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    const auto seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
     pump_done = true;
 
     if (watcher && !interrupted) {
         ::raise(SIGINT);
-        ctx.run_for(std::chrono::milliseconds(50));
+        context.run_for(std::chrono::milliseconds(50));
     }
 
     const double mib = static_cast<double>(moved) / (1024.0 * 1024.0);
 
-    if (!r && r.error) {
-        std::fprintf(stderr, "pump: %s\n", r.error->message().c_str());
+    if (!result && result.error) {
+        std::fprintf(stderr, "pump: %s\n", result.error->message().c_str());
         return 1;
     }
     if (interrupted) {
-        std::printf("interrupted: moved %.1f MiB in %.2fs (%.0f MiB/s)\n", mib, secs,
-                    secs > 0 ? mib / secs : 0.0);
+        std::printf("interrupted: moved %.1f MiB in %.2fs (%.0f MiB/s)\n", mib, seconds,
+                    seconds > 0 ? mib / seconds : 0.0);
         return 0;
     }
-    std::printf("moved %.1f MiB in %.2fs (%.0f MiB/s)\n", mib, secs,
-                secs > 0 ? mib / secs : 0.0);
+    std::printf("moved %.1f MiB in %.2fs (%.0f MiB/s)\n", mib, seconds,
+                seconds > 0 ? mib / seconds : 0.0);
     return 0;
 }
